@@ -102,7 +102,7 @@ end
 A 65,536-neuron sparse CUDA reservoir lobe with OU-SDE membrane dynamics,
 STDP-capable recurrent weights, and a dense readout.
 
-Requires a CUDA GPU. Construct with [`SparseBrain`](@ref SparseBrain(::Float32)).
+Requires a CUDA GPU. Construct with `SparseBrain(tau_m; n_in, n_out, name)`.
 
 # Fields
 - `W::CuSparseMatrixCSC{Float16,Int32}`: sparse recurrent weights (1% connectivity)
