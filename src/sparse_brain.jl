@@ -506,9 +506,9 @@ Execute one OU-SDE simulation timestep on a single lobe.
 - `inhibition`: global inhibition level (default `0.0`, clamped to `[0, MAX_INHIBITION]`).
   Raises the spike threshold by `inhibition * INHIBITION_GAIN` mV.
 - `reflex_eta`: Hebbian learning rate for `W_out` (default `ETA`).
-- `plasticity`: `:readout_only` (default, frozen W + Hebbian W_out every 10 ticks),
-  `:recurrent_stdp` (pair STDP every tick on sparse W nonzeros + readout Hebbian),
-  `:none` (no weight updates).
+- `plasticity`: one of `:readout_only` (default; frozen `W` plus Hebbian `W_out`
+  every 10 ticks), `:recurrent_stdp` (pair STDP every tick on sparse `W`
+  nonzeros plus readout Hebbian), or `:none` (no weight updates).
 - `recurrent_eta`: learning rate for pair STDP (default `1f-4`; must be finite when
   `plasticity=:recurrent_stdp`). Independent of `reflex_eta` / reflex gating.
 - `sync`: call `CUDA.synchronize()` at end (default `true`).
