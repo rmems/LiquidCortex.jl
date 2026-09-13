@@ -144,6 +144,15 @@ export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
             get_output(brain)
         catch
             # Best-effort: constructor/step failures must not abort install.
+        finally
+            # Drop the warmup lobe and CUDA pool so Pkg.test() / later
+            # EnsembleBrain construction is not starved on 16 GB cards.
+            try
+                GC.gc(true)
+                CUDA.reclaim()
+                CUDA.device_reset!()
+            catch
+            end
         end
     end
 end

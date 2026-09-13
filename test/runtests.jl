@@ -187,6 +187,7 @@ end
         end
 
         @testset "GPU: SparseBrain default dims" begin
+            reclaim_gpu_hard!()
             brain = SparseBrain(20.0f0; name="test")
             @test brain isa SparseBrain
             @test brain.tau_m == 20.0f0
