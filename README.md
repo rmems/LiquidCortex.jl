@@ -6,7 +6,7 @@ GPU-accelerated sparse liquid state machine for neuromorphic computing
 
 ![Julia](https://img.shields.io/badge/language-Julia-9558B2)
 ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
-![Coverage](https://codecov.io/gh/Limen-Neural/LiquidCortex.jl/branch/main/graph/badge.svg)
+![Coverage](https://codecov.io/gh/rmems/LiquidCortex.jl/branch/main/graph/badge.svg)
 
 ---
 
