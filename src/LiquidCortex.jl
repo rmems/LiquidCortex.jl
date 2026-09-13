@@ -130,35 +130,21 @@ export SparseBrain, EnsembleBrain
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
 
-# Precompile the SparseBrain hot path at install time. `__init__` has not
-# run yet, so `_cuda_available[]` is still false — probe the device directly.
-# CUDA kernels cannot be recorded without a visible GPU; CPU-only caches
-# stay empty by design. Skip EnsembleBrain (four 65k-neuron lobes) and the
-# 2,048-neuron reference LSM so precompile cannot OOM smaller cards.
+# Warm method inference at install time. Do **not** construct SparseBrain or
+# EnsembleBrain here: each lobe is 65,536 neurons, `Pkg.test()` re-precompiles
+# in-process, and `CUDA.device_reset!` is a no-op on CUDA.jl 6.3 — executing
+# the constructors starved the 16 GB self-hosted GPU suite (RM-333 / #51).
+# `__init__` has not run, so probe the device directly. Skip the reference LSM.
 @compile_workload begin
+    _validate_plasticity_kwargs(; plasticity=:readout_only, recurrent_eta=1.0f-4)
+    _should_capture_runtime_exception(ErrorException("precompile"))
     if CUDA.functional()
-        try
-            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="precompile")
-            u = CUDA.zeros(Float32, 8)
-            # Default `:readout_only` updates W_out when tick_count % 10 == 0
-            # after increment, so ten steps record that CUDA path.
-            for _ in 1:10
-                step!(brain, u; inhibition=0.5f0)
-            end
-            get_output(brain)
-        catch e
-            e isa InterruptException && rethrow()
-            # Best-effort: constructor/step failures must not abort install.
-        finally
-            # Drop the warmup lobe and CUDA pool so Pkg.test() / later
-            # EnsembleBrain construction is not starved on 16 GB cards.
-            try
-                GC.gc(true)
-                CUDA.reclaim()
-                CUDA.device_reset!()
-            catch
-            end
-        end
+        precompile(SparseBrain, (Float32,))
+        precompile(step!, (SparseBrain, CuVector{Float32}))
+        precompile(get_output, (SparseBrain,))
+        precompile(EnsembleBrain, ())
+        precompile(ensemble_step!, (EnsembleBrain, CuVector{Float32}))
+        precompile(get_ensemble_output, (EnsembleBrain,))
     end
 end
 
