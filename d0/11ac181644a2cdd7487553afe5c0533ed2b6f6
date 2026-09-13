@@ -1,0 +1,19 @@
+src/LiquidCortex.jl
+  s_16a2cde0d1e505::t_8c9690b458d85f 143-147,149-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d011ac181644a2cdd7487553afe5c0533ed2b6f6",
+  "prompts": {},
+  "sessions": {
+    "s_16a2cde0d1e505": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "9e50a4ac-75d0-47c4-a6a2-5034ad4a90c8",
+        "model": "grok-4.6"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
