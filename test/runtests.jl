@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
 using Test
 using LiquidCortex
 using CUDA

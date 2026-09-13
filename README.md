@@ -29,24 +29,24 @@ and STDP covariance learning.
 
 ```julia
 using Pkg
-Pkg.add("LiquidCortex")
+Pkg.add(url="https://github.com/rmems/LiquidCortex.jl")
 ```
 
 ## Quick Start
 
 ```julia
-using LiquidCortex
+using LiquidCortex, CUDA
 
 # Create a 65,536-neuron sparse LSM lobe
 brain = SparseBrain(20.0f0)  # τ_m = 20ms, default n_in=14, n_out=16
 
-# Or with custom dimensions
-brain = SparseBrain(20.0f0; n_in=8, n_out=4)
+# Or with custom dimensions:
+#   brain = SparseBrain(20.0f0; n_in=8, n_out=4)
 
 # Or create the full 4-lobe ensemble (262,144 neurons)
 ensemble = EnsembleBrain()
 
-# Step the reservoir with an input vector
+# Step the reservoir with an input vector — length(u) must equal brain.n_in
 u = CUDA.zeros(Float32, 14)
 step!(brain, u; inhibition=0.3f0)
 
@@ -91,7 +91,8 @@ Requires **CUDA.jl 6.x**. Local verification and CI workflows use **Julia 1.12**
 dV = ((V_rest - V)/τ  +  W_rec·s(t)  +  W_in·x(t)) dt  +  σ dW
 ```
 
-Discretized as Euler-Maruyama. Spike when `V ≥ θ`; reset to `V_rest`.
+Discretized as Euler-Maruyama. Spike when `V > θ_dynamic` (the inhibition-shifted
+threshold); reset to `V_reset` = −70 mV, which is distinct from `V_rest` = −65 mV.
 
 *Ornstein & Uhlenbeck (1930); Maass, Natschläger & Markram (2002)*
 
