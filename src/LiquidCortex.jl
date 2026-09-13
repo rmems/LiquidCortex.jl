@@ -20,6 +20,7 @@ Check `LiquidCortex._cuda_available[]` to test CUDA availability.
 module LiquidCortex
 
 using CUDA
+using PrecompileTools
 using Sentry
 
 # ── CUDA availability flag ────────────────────────────────────────────────
@@ -128,5 +129,23 @@ include("reference_lsm.jl")
 export SparseBrain, EnsembleBrain
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
+
+# Warm method inference at install time. Do **not** construct SparseBrain or
+# EnsembleBrain here: each lobe is 65,536 neurons, `Pkg.test()` re-precompiles
+# in-process, and `CUDA.device_reset!` is a no-op on CUDA.jl 6.3 — executing
+# the constructors starved the 16 GB self-hosted GPU suite (RM-333 / #51).
+# `__init__` has not run, so probe the device directly. Skip the reference LSM.
+@compile_workload begin
+    _validate_plasticity_kwargs(; plasticity=:readout_only, recurrent_eta=1.0f-4)
+    _should_capture_runtime_exception(ErrorException("precompile"))
+    if CUDA.functional()
+        precompile(SparseBrain, (Float32,))
+        precompile(step!, (SparseBrain, CuVector{Float32}))
+        precompile(get_output, (SparseBrain,))
+        precompile(EnsembleBrain, ())
+        precompile(ensemble_step!, (EnsembleBrain, CuVector{Float32}))
+        precompile(get_ensemble_output, (EnsembleBrain,))
+    end
+end
 
 end # module LiquidCortex
