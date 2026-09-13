@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   gpu-test:
-    name: Julia 1.12 — GPU tests (self-hosted)
+    name: Julia 1.13 — GPU tests (self-hosted)
     # Fork PRs: skip (do not checkout untrusted code onto the GPU host).
     if: >
       github.event_name != 'pull_request' ||
@@ -51,8 +51,8 @@ jobs:
           set -euo pipefail
           command -v julia
           julia --version
-          # Job claims Julia 1.12; fail early if runner default drifts.
-          julia -e 'VERSION.major == 1 && VERSION.minor == 12 || error("expected Julia 1.12, got $VERSION")'
+          # Job claims Julia 1.13; fail early if runner default drifts.
+          julia -e 'VERSION.major == 1 && VERSION.minor == 13 || error("expected Julia 1.13, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
       - name: Instantiate

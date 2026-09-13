@@ -25,13 +25,13 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - Generic inhibition interface: `step!(brain::SparseBrain, u::CuVector{Float32}; inhibition::Real=0.0, reflex_eta::Real=ETA)`
 - Step kwargs: `plasticity=:readout_only` (default), `:recurrent_stdp`, `:none`; plus `sync`, `record_history`, `use_device_noise`, `recurrent_eta`
 - Configurable dimensions: `SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="default")`
-- Compat: CUDA.jl `6` (latest); local TDD/verify on Julia 1.12
+- Compat: CUDA.jl `6` (latest); local TDD/verify on Julia 1.13
 
 ## Testing
 
 - CPU tests always run (package load, API exports, config validation)
 - GPU tests gated by `LiquidCortex._cuda_available[]`
-- CI workflows run Julia **1.12** only (compat still declares 1.10–1.12)
+- CI workflows run Julia **1.13** only. Compat declares `1.10, 1.11, 1.12`, which resolves to the range `[1.10, 2.0)` and therefore already admits 1.13 — but 1.10 and 1.11 are never built.
 - **CPU smoke:** `.github/workflows/ci.yml` → `ubuntu-latest`
 - **GPU tests:** `.github/workflows/gpu-ci.yml` → self-hosted runner labels
   `self-hosted`, `Linux`, `X64`, `gpu` (local RTX host under
@@ -42,7 +42,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 
 - Branch naming: `feature/`, `fix/`, `ci/`, `refactor/`, `docs/`
 - Run tests before pushing
-- All CI checks must pass (Julia 1.12, Codacy, CodeRabbit)
+- All CI checks must pass (Julia 1.13, Codacy, CodeRabbit)
 - Address all bot review threads before merge
 - Pin GitHub Actions to full commit SHAs (not tags)
 - Use `julia-actions/julia-processcoverage` for coverage — not Coverage.jl in Project.toml
@@ -57,5 +57,5 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 
 ## Cursor Cloud specific instructions
 
-- Julia is provided via `juliaup` with default channel **1.12** (within this repo's `1.10, 1.11, 1.12` compat). Standard setup applies: `julia --project -e 'using Pkg; Pkg.instantiate()'` then `julia --project -e 'using Pkg; Pkg.test()'`.
+- Julia is provided via `juliaup` with default channel **1.13** (admitted by this repo's `1.10, 1.11, 1.12` compat, which spans [1.10, 2.0)). Standard setup applies: `julia --project -e 'using Pkg; Pkg.instantiate()'` then `julia --project -e 'using Pkg; Pkg.test()'`.
 - The Cursor Cloud VM has **no CUDA GPU**. The test command loads CUDA artifacts and runs the CPU tests; the GPU test block is skipped (this is expected — the suite still passes). GPU paths (`step!` and cuSPARSE ops) require a real device and cannot be exercised here.
