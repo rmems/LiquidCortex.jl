@@ -140,9 +140,14 @@ export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
         try
             brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="precompile")
             u = CUDA.zeros(Float32, 8)
-            step!(brain, u; inhibition=0.5f0)
+            # Default `:readout_only` updates W_out when tick_count % 10 == 0
+            # after increment, so ten steps record that CUDA path.
+            for _ in 1:10
+                step!(brain, u; inhibition=0.5f0)
+            end
             get_output(brain)
-        catch
+        catch e
+            e isa InterruptException && rethrow()
             # Best-effort: constructor/step failures must not abort install.
         finally
             # Drop the warmup lobe and CUDA pool so Pkg.test() / later
