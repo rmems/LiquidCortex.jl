@@ -48,11 +48,13 @@ const V_RESET = -70.0f0       # Post-spike reset (mV)
 const SIGMA = 2.0f0         # OU noise amplitude
 const REFRAC_T = 5             # Refractory period (timesteps)
 
-# ── STDP Covariance Learning Parameters ──────────────────────────────────────
-# ΔWᵢⱼ = η · Cᵢⱼ · exp(-|Δt| / τ_spike)
+# ── STDP Parameters ──────────────────────────────────────────────────────────
+# Pair-based trace rule applied to the sparse recurrent edges
+# (see `_pair_stdp_kernel!`):
+#   Δwᵢⱼ = η · (trace_pre[i] · s[j] − s[i] · trace_post[j])
+# Both traces decay with TAU_TRACE.
 
 const ETA = 0.001f0       # Learning rate
-const TAU_SPIKE = 20.0f0        # STDP time constant
 const TAU_TRACE = 20.0f0        # Eligibility trace decay
 const W_MAX = 1.0f0         # Weight saturation (Float16 range)
 
@@ -228,14 +230,14 @@ step!(brain, u; inhibition=0.5f0)
 function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="default")
     n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
     n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
-    println("[brain:$name] Initializing 65,536-neuron lobe (τ_m=$(tau_m)ms, in=$(n_in), out=$(n_out))...")
+    @debug "[brain:$name] Initializing 65,536-neuron lobe (τ_m=$(tau_m)ms, in=$(n_in), out=$(n_out))..."
 
     xavier_std_in = sqrt(2.0f0 / Float32(n_in))
     xavier_std_out = sqrt(2.0f0 / Float32(N))
 
     # ── 1. Sparse recurrent weight matrix (Float16, 1% connectivity) ─────────
     nnz_expected = round(Int, N * N * CONN_PROB)
-    println("[brain:$name] Generating sparse connectivity (~$(round(nnz_expected / 1e6, digits=1))M synapses)...")
+    @debug "[brain:$name] Generating sparse connectivity (~$(round(nnz_expected / 1e6, digits=1))M synapses)..."
 
     # Build sparse matrix in COO format for efficiency
     rows = rand(1:N, nnz_expected)
@@ -257,7 +259,7 @@ function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="
     scale_factor = target_rho / max(spectral_approx, 1e-6)
     W_cpu .*= Float16(scale_factor)
 
-    println("[brain:$name] W_sparse: $(actual_nnz) nnz, ρ≈$(round(target_rho, digits=2))")
+    @debug "[brain:$name] W_sparse: $(actual_nnz) nnz, ρ≈$(round(target_rho, digits=2))"
 
     # Transfer to GPU as CuSparseMatrixCSC
     # Edge lists for pair STDP are built lazily in `_ensure_edge_indices!`
@@ -275,7 +277,7 @@ function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="
     # W_out ~ N(0, √(2/N)) — ensures non-trivial readout from tick 1
     W_out = cpu_randn_cu(n_out, N)
     W_out .*= xavier_std_out
-    println("[brain:$name] W_out: Xavier/Glorot init σ=$(round(Float64(xavier_std_out), sigdigits=4))")
+    @debug "[brain:$name] W_out: Xavier/Glorot init σ=$(round(Float64(xavier_std_out), sigdigits=4))"
 
     # ── 4. Neuron state vectors ──────────────────────────────────────────────
     V = CUDA.fill(Float32(V_REST), N)
@@ -295,10 +297,10 @@ function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="
 
     # ── 7. Rolling spike history for deep temporal covariance (on GPU) ───────
     history = CUDA.zeros(Float32, HIST_DEPTH, N)
-    println("[brain:$name] History buffer: $(HIST_DEPTH)×$(N) = $(round(HIST_DEPTH * N * 4 / 1e6, digits=1)) MB")
+    @debug "[brain:$name] History buffer: $(HIST_DEPTH)×$(N) = $(round(HIST_DEPTH * N * 4 / 1e6, digits=1)) MB"
 
     CUDA.synchronize()
-    println("[brain:$name] ✓ Lobe initialized (τ_m=$(tau_m)ms)")
+    @debug "[brain:$name] ✓ Lobe initialized (τ_m=$(tau_m)ms)"
 
     SparseBrain(
         W_gpu, pre_idx, post_idx, edge_nnz,
@@ -606,7 +608,7 @@ function diagnostics(brain::SparseBrain)
         " spikes=", brain.total_spikes,
         " rate=", round(brain.last_spike_rate * 100, digits=2), "%",
         " V_thresh=", round(brain.v_thresh_dynamic, digits=1),
-        " W_out_norm=", round(Float64(norm(Array(brain.W_out))), digits=4)
+        " W_out_norm=", round(Float64(norm(brain.W_out)), digits=4)
     )
 end
 
@@ -738,18 +740,12 @@ y = get_ensemble_output(ensemble)             # Vector{Float32} of length 4
 ```
 """
 function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
-    println()
-    println("╔══════════════════════════════════════════════════════════════╗")
-    println("║  Ensemble Brain — 4 Lobes × 65,536 = 262,144 Neurons      ║")
-    println("║  Fast(10ms) │ Medium(25ms) │ Slow(50ms) │ Integrator(100ms) ║")
-    println("╚══════════════════════════════════════════════════════════════╝")
-    println()
+    @debug "[ensemble] Initializing $(N_LOBES) lobes × $(N) = $(N_LOBES * N) neurons"
 
     lobes = SparseBrain[]
     for i in 1:N_LOBES
-        println("─── Lobe $i/$(N_LOBES): $(LOBE_NAMES[i]) (τ_m=$(LOBE_TAUS[i])ms) ───")
+        @debug "[ensemble] Lobe $i/$(N_LOBES): $(LOBE_NAMES[i]) (τ_m=$(LOBE_TAUS[i])ms)"
         push!(lobes, SparseBrain(LOBE_TAUS[i]; n_in=n_in, n_out=n_out, name=LOBE_NAMES[i]))
-        println()
     end
 
     agg_output = CUDA.zeros(Float32, n_out)
@@ -759,10 +755,8 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
     free_mem = CUDA.free_memory() / 1e9
     total_mem = CUDA.total_memory() / 1e9
     used = total_mem - free_mem
-    println("═══════════════════════════════════════════════════════════════")
-    @printf("[ensemble] ✓ All %d lobes online — %d total neurons\n", N_LOBES, N_LOBES * N)
-    @printf("[ensemble] VRAM: %.2f / %.2f GB (%.0f%% used)\n", used, total_mem, used / total_mem * 100)
-    println("═══════════════════════════════════════════════════════════════")
+    @debug @sprintf("[ensemble] ✓ All %d lobes online — %d total neurons", N_LOBES, N_LOBES * N)
+    @debug @sprintf("[ensemble] VRAM: %.2f / %.2f GB (%.0f%% used)", used, total_mem, used / total_mem * 100)
 
     EnsembleBrain(lobes, copy(LOBE_NAMES), agg_output, copy(LOBE_WEIGHTS))
 end
@@ -944,7 +938,7 @@ function ensemble_diagnostics(eb::EnsembleBrain)
     lines = String[]
     for (i, lobe) in enumerate(eb.lobes)
         rate_pct = round(lobe.last_spike_rate * 100, digits=2)
-        w_norm = round(Float64(norm(Array(lobe.W_out))), digits=4)
+        w_norm = round(Float64(norm(lobe.W_out)), digits=4)
         push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
             eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
     end
@@ -1002,4 +996,3 @@ function step!(eb::EnsembleBrain, u::CuVector{Float32};
     return nothing
 end
 
-println("[brain] sparse_brain.jl loaded — EnsembleBrain (4-lobe, 262,144 neurons) ready")

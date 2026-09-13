@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
 # Standalone brain test — requires CUDA GPU
 # Run: julia --project examples/brain_standalone.jl
 
