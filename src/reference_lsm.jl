@@ -29,10 +29,34 @@ const _ref_n_out = Ref{Int}(REF_OUT_DEFAULT)
 const _ref_initialized = Ref{Bool}(false)
 
 """
-    _init_ref_lsm!(; n_in=16, n_out=16)
+    _init_ref_lsm!(; n_in=16, n_out=16) -> Nothing
 
-Initialize the 2,048-neuron reference LSM reservoir on GPU.
-Called lazily on first `run_lsm_step` invocation, or manually for custom dimensions.
+Allocate the 2,048-neuron reference LSM reservoir on GPU.
+
+Call this **manually** when you need to pin `n_in` / `n_out` before the first
+step, or to pre-allocate so the first [`run_lsm_step`](@ref) is not the
+allocation. Otherwise the first `run_lsm_step` / [`run_lsm_step_str`](@ref)
+initializes lazily from `length(inputs_vec)` and the `n_out` keyword.
+
+Re-calling after the reservoir is already initialized overwrites the global
+`_ref_*` state (weights and membrane vector are replaced). `n_in` and `n_out`
+must be positive.
+
+# Keyword Arguments
+- `n_in::Int=16`: input dimension (`REF_IN_DEFAULT`)
+- `n_out::Int=16`: readout dimension (`REF_OUT_DEFAULT`)
+
+# Returns
+- `Nothing`: module-global GPU buffers are filled (`_ref_W`, `_ref_Win`,
+  `_ref_Wout`, `_ref_x`) and `_ref_initialized` is set
+
+# Examples
+```julia
+using LiquidCortex
+LiquidCortex._init_ref_lsm!(; n_in=8, n_out=4)   # pre-allocate custom dims
+y = LiquidCortex.run_lsm_step(zeros(Float32, 8), 0.0f0)
+length(y) == 4
+```
 """
 function _init_ref_lsm!(; n_in::Int=REF_IN_DEFAULT, n_out::Int=REF_OUT_DEFAULT)
     n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
@@ -50,11 +74,38 @@ end
 _ref_is_initialized() = _ref_initialized[]
 
 """
-    run_lsm_step(inputs_vec, inhibit_val; n_out=16)
+    run_lsm_step(inputs_vec, inhibit_val; n_out=16) -> Vector{Float32}
 
-`inputs_vec`: Float32 vector (input dimension determines `n_in` on lazy init).
-`inhibit_val`: Inhibition signal [0.0, 1.0].
-`n_out`: Output dimension (default 16, only used on first-call lazy init).
+Advance the 2,048-neuron dense reference reservoir by one tick.
+
+On the first call (when `_ref_initialized` is false) this lazily allocates
+the GPU state: `n_in = length(inputs_vec)` and `n_out` from the keyword.
+Later calls require `length(inputs_vec) == _ref_n_in[]` or they throw
+`DimensionMismatch`. Requires a CUDA GPU.
+
+# Arguments
+- `inputs_vec::Vector{Float32}`: host input; length sets `n_in` on lazy init
+- `inhibit_val::Float32`: inhibition in `[0, 1]`; recurrent gain is
+  `1 - 0.4 * inhibit_val`
+
+# Keyword Arguments
+- `n_out::Int=16`: readout size used **only** on first-call lazy init.
+  Ignored once the reservoir exists — call [`_init_ref_lsm!`](@ref) first
+  to set both dims explicitly.
+
+# Returns
+- `Vector{Float32}`: host copy of the `n_out`-element readout
+
+# Examples
+```julia
+using LiquidCortex
+# Custom readout width on first call (also sets n_in from the vector)
+y = LiquidCortex.run_lsm_step(zeros(Float32, 8), 0.25f0; n_out=4)
+length(y) == 4
+
+# Default 16-in / 16-out lazy init
+y16 = LiquidCortex.run_lsm_step(zeros(Float32, 16), 0.0f0)
+```
 """
 function run_lsm_step(inputs_vec::Vector{Float32}, inhibit_val::Float32;
     n_out::Int=REF_OUT_DEFAULT)
@@ -91,9 +142,31 @@ function run_lsm_step(inputs_vec::Vector{Float32}, inhibit_val::Float32;
 end
 
 """
-    run_lsm_step_str(inputs_vec, inhibit_val; n_out=16)
+    run_lsm_step_str(inputs_vec, inhibit_val; n_out=16) -> String
 
-Returns result as a comma-separated string for easier integration.
+Same as [`run_lsm_step`](@ref), but joins the readout with commas.
+
+Useful for FFI / logging paths that want a single string rather than a
+`Vector{Float32}`. Lazy-init rules and `n_out` semantics match
+`run_lsm_step`.
+
+# Arguments
+- `inputs_vec::Vector{Float32}`: host input
+- `inhibit_val::Float32`: inhibition in `[0, 1]`
+
+# Keyword Arguments
+- `n_out::Int=16`: readout size used only on first-call lazy init
+
+# Returns
+- `String`: comma-separated readout, e.g. `"0.12,-0.03,0.45"`
+
+# Examples
+```julia
+using LiquidCortex
+s = LiquidCortex.run_lsm_step_str(zeros(Float32, 8), 0.0f0; n_out=4)
+s isa String
+occursin(",", s)
+```
 """
 function run_lsm_step_str(inputs_vec::Vector{Float32}, inhibit_val::Float32;
     n_out::Int=REF_OUT_DEFAULT)
