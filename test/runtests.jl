@@ -104,88 +104,91 @@ end
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
     end
 
+    # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
+    @testset "Reference LSM" begin
+        if LiquidCortex._cuda_available[]
+            @testset "Lazy initialization" begin
+                original_state = snapshot_reference_lsm_state()
+                try
+                    clear_reference_lsm_state!()
+                    @test !LiquidCortex._ref_is_initialized()
+
+                    # First call triggers lazy GPU init from input length / default n_out.
+                    input = zeros(Float32, LiquidCortex.REF_IN_DEFAULT)
+                    output = LiquidCortex.run_lsm_step(input, 0.5f0)
+                    @test LiquidCortex._ref_is_initialized()
+                    @test length(output) == LiquidCortex.REF_OUT_DEFAULT
+                    @test size(LiquidCortex._ref_Win[]) == (
+                        LiquidCortex.REF_N,
+                        LiquidCortex.REF_IN_DEFAULT,
+                    )
+                    @test size(LiquidCortex._ref_Wout[]) == (
+                        LiquidCortex.REF_OUT_DEFAULT,
+                        LiquidCortex.REF_N,
+                    )
+                finally
+                    restore_reference_lsm_state!(original_state)
+                end
+            end
+
+            @testset "Custom dimensions" begin
+                original_state = snapshot_reference_lsm_state()
+                try
+                    clear_reference_lsm_state!()
+                    input = zeros(Float32, 8)
+                    output = LiquidCortex.run_lsm_step(input, 0.0f0; n_out=4)
+                    @test length(output) == 4
+                    @test LiquidCortex._ref_n_in[] == 8
+                    @test LiquidCortex._ref_n_out[] == 4
+                    @test size(LiquidCortex._ref_Win[]) == (LiquidCortex.REF_N, 8)
+                    @test size(LiquidCortex._ref_Wout[]) == (4, LiquidCortex.REF_N)
+                finally
+                    restore_reference_lsm_state!(original_state)
+                end
+            end
+
+            @testset "Dimension validation" begin
+                original_state = snapshot_reference_lsm_state()
+                try
+                    clear_reference_lsm_state!()
+                    @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=0, n_out=4)
+                    @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=4, n_out=0)
+
+                    # Init with 16 inputs, then reject a mismatched length.
+                    LiquidCortex.run_lsm_step(zeros(Float32, 16), 0.0f0)
+                    @test_throws DimensionMismatch LiquidCortex.run_lsm_step(
+                        zeros(Float32, 8),
+                        0.0f0,
+                    )
+                finally
+                    restore_reference_lsm_state!(original_state)
+                end
+            end
+
+            @testset "run_lsm_step_str" begin
+                original_state = snapshot_reference_lsm_state()
+                try
+                    clear_reference_lsm_state!()
+                    output = LiquidCortex.run_lsm_step_str(zeros(Float32, 16), 0.0f0)
+                    parts = split(output, ",")
+
+                    @test output isa String
+                    @test occursin(",", output)
+                    @test length(parts) == LiquidCortex.REF_OUT_DEFAULT
+                    @test all(part -> !isempty(part), parts)
+                finally
+                    restore_reference_lsm_state!(original_state)
+                end
+            end
+        else
+            @info "Skipping reference LSM tests — no CUDA device"
+            @test_skip "Reference LSM GPU tests skipped"
+        end
+    end
+
     # ── GPU tests (only run when CUDA is available) ──────────────────────────
 
     if LiquidCortex._cuda_available[]
-        @testset "GPU: Reference LSM lazy initialization" begin
-            original_state = snapshot_reference_lsm_state()
-            try
-                clear_reference_lsm_state!()
-                @test !LiquidCortex._ref_is_initialized()
-
-                output = LiquidCortex.run_lsm_step(
-                    zeros(Float32, LiquidCortex.REF_IN_DEFAULT),
-                    0.5f0,
-                )
-
-                @test LiquidCortex._ref_is_initialized()
-                @test length(output) == LiquidCortex.REF_OUT_DEFAULT
-                @test size(LiquidCortex._ref_Win[]) == (
-                    LiquidCortex.REF_N,
-                    LiquidCortex.REF_IN_DEFAULT,
-                )
-                @test size(LiquidCortex._ref_Wout[]) == (
-                    LiquidCortex.REF_OUT_DEFAULT,
-                    LiquidCortex.REF_N,
-                )
-            finally
-                restore_reference_lsm_state!(original_state)
-            end
-        end
-
-        @testset "GPU: Reference LSM custom dimensions" begin
-            original_state = snapshot_reference_lsm_state()
-            try
-                clear_reference_lsm_state!()
-                LiquidCortex._init_ref_lsm!(; n_in=8, n_out=4)
-
-                @test LiquidCortex._ref_is_initialized()
-                @test LiquidCortex._ref_n_in[] == 8
-                @test LiquidCortex._ref_n_out[] == 4
-                @test size(LiquidCortex._ref_Win[]) == (LiquidCortex.REF_N, 8)
-                @test size(LiquidCortex._ref_Wout[]) == (4, LiquidCortex.REF_N)
-
-                output = LiquidCortex.run_lsm_step(zeros(Float32, 8), 0.0f0)
-                @test length(output) == 4
-            finally
-                restore_reference_lsm_state!(original_state)
-            end
-        end
-
-        @testset "GPU: Reference LSM dimension validation" begin
-            original_state = snapshot_reference_lsm_state()
-            try
-                clear_reference_lsm_state!()
-                @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=0, n_out=4)
-                @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=4, n_out=0)
-
-                # Hardcode n_in so the mismatch vs input length 8 is guaranteed
-                # regardless of REF_IN_DEFAULT.
-                LiquidCortex._init_ref_lsm!(; n_in=6, n_out=4)
-                @test_throws DimensionMismatch LiquidCortex.run_lsm_step(
-                    zeros(Float32, 8),
-                    0.0f0,
-                )
-            finally
-                restore_reference_lsm_state!(original_state)
-            end
-        end
-
-        @testset "GPU: Reference LSM string output" begin
-            original_state = snapshot_reference_lsm_state()
-            try
-                clear_reference_lsm_state!()
-                output = LiquidCortex.run_lsm_step_str(zeros(Float32, 6), 0.0f0; n_out=3)
-                parts = split(output, ",")
-
-                @test output isa String
-                @test length(parts) == 3
-                @test all(part -> !isempty(part), parts)
-            finally
-                restore_reference_lsm_state!(original_state)
-            end
-        end
-
         @testset "GPU: SparseBrain default dims" begin
             brain = SparseBrain(20.0f0; name="test")
             @test brain isa SparseBrain
