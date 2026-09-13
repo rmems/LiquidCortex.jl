@@ -130,19 +130,21 @@ export SparseBrain, EnsembleBrain
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
 
-# Precompile the hot path at install time. `__init__` has not run yet, so
-# `_cuda_available[]` is still false — probe the device directly. Skip the
-# 2,048-neuron reference LSM (lazy-init, not the critical path).
+# Precompile the SparseBrain hot path at install time. `__init__` has not
+# run yet, so `_cuda_available[]` is still false — probe the device directly.
+# CUDA kernels cannot be recorded without a visible GPU; CPU-only caches
+# stay empty by design. Skip EnsembleBrain (four 65k-neuron lobes) and the
+# 2,048-neuron reference LSM so precompile cannot OOM smaller cards.
 @compile_workload begin
     if CUDA.functional()
-        brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="precompile")
-        u = CUDA.zeros(Float32, 8)
-        step!(brain, u; inhibition=0.5f0)
-        get_output(brain)
-
-        ensemble = EnsembleBrain(; n_in=8, n_out=4)
-        ensemble_step!(ensemble, u; inhibition=0.3f0)
-        get_ensemble_output(ensemble)
+        try
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="precompile")
+            u = CUDA.zeros(Float32, 8)
+            step!(brain, u; inhibition=0.5f0)
+            get_output(brain)
+        catch
+            # Best-effort: constructor/step failures must not abort install.
+        end
     end
 end
 
