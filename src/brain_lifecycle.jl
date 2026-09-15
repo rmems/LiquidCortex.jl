@@ -89,9 +89,9 @@ function reset!(eb::EnsembleBrain; keep_weights::Bool=true)
     return eb
 end
 
-# Eager device-buffer release. No synchronize: this is the GC-finalizer
-# path, and `CUDA.synchronize()` from a finalizer can hang at shutdown.
-# Public `free!` synchronizes first so pending `sync=false` kernels finish.
+# Eager device-buffer release. Public `free!` synchronizes first so
+# pending `sync=false` kernels finish; this helper only returns storage
+# to the CUDA.jl pool (`unsafe_free!` is a no-op after the first call).
 function _free_device_buffers!(brain::SparseBrain)
     CUDA.unsafe_free!(brain.W)
     CUDA.unsafe_free!(brain.pre_idx)
@@ -136,9 +136,10 @@ call). After this, `step!` / `reset!` / `get_output` must not be used on
 Synchronizes the device first so kernels launched with `sync=false` cannot
 touch buffers after they are returned to the pool.
 
-CuArray finalizers already free buffers eventually. A `SparseBrain` finalizer
-also calls this release path. `free!` is the deterministic path when peak VRAM
-matters (for example before constructing an [`EnsembleBrain`](@ref)).
+CuArray finalizers already free buffers eventually, but they do not wait
+for pending kernels and they honor extracted-field lifetimes. `free!` is the
+deterministic, synchronized path when peak VRAM matters (for example before
+constructing an [`EnsembleBrain`](@ref)).
 
 # Arguments
 - `brain::SparseBrain`: lobe whose GPU allocations are released
