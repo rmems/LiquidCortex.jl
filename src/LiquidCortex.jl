@@ -160,7 +160,7 @@ include("reference_lsm.jl")
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-export SparseBrain, EnsembleBrain
+export SparseBrain, EnsembleBrain, EnsembleDesynchronizedError
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
 export enable_telemetry!
