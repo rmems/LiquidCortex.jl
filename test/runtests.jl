@@ -129,6 +129,10 @@ end
         @test_throws ArgumentError EnsembleBrain(;
             taus=Float32[10.0, 20.0], weights=Float32[0.5, 0.5],
             names=["only-one"])
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[10.0], weights=Float32[NaN32])
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[10.0], weights=Float32[Inf32])
 
         err = try
             SparseBrain(0.0f0)
@@ -168,7 +172,10 @@ end
         @test_throws ArgumentError BrainConfig(conn_prob=-0.1)
         @test_throws ArgumentError BrainConfig(conn_prob=1.1)
         @test_throws ArgumentError BrainConfig(spectral_radius=-1)
+        @test_throws ArgumentError BrainConfig(spectral_radius=70_000)
         @test_throws ArgumentError BrainConfig(dt=0)
+        @test_throws ArgumentError BrainConfig(dt=20, tau_trace=20)
+        @test_throws ArgumentError BrainConfig(dt=25, tau_trace=20)
         @test_throws ArgumentError BrainConfig(hist_depth=0)
         @test_throws ArgumentError BrainConfig(cov_subsample=0)
         @test_throws ArgumentError BrainConfig(sigma=-1)

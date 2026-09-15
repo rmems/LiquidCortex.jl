@@ -132,8 +132,8 @@ function _validate_brain_config(
     n > 0 || throw(ArgumentError("N must be positive, got $n"))
     (isfinite(conn_prob) && 0 <= conn_prob <= 1) || throw(ArgumentError(
         "conn_prob must be in [0, 1], got $conn_prob"))
-    (isfinite(spectral_radius) && spectral_radius >= 0) || throw(ArgumentError(
-        "spectral_radius must be finite and ≥ 0, got $spectral_radius"))
+    (isfinite(spectral_radius) && 0 <= spectral_radius <= floatmax(Float16)) || throw(ArgumentError(
+        "spectral_radius must be finite, ≥ 0, and ≤ floatmax(Float16), got $spectral_radius"))
     (isfinite(dt) && dt > 0) || throw(ArgumentError(
         "dt must be positive and finite, got $dt"))
     hist_depth > 0 || throw(ArgumentError(
@@ -148,6 +148,8 @@ function _validate_brain_config(
     refrac_t >= 0 || throw(ArgumentError("refrac_t must be ≥ 0, got $refrac_t"))
     (isfinite(tau_trace) && tau_trace > 0) || throw(ArgumentError(
         "tau_trace must be positive and finite, got $tau_trace"))
+    dt < tau_trace || throw(ArgumentError(
+        "dt must be < tau_trace so eligibility traces decay (got dt=$dt, tau_trace=$tau_trace)"))
     (isfinite(w_max) && w_max > 0) || throw(ArgumentError(
         "w_max must be positive and finite, got $w_max"))
     isfinite(inhibition_gain) || throw(ArgumentError(
@@ -250,7 +252,10 @@ function _generate_recurrent_cpu(cfg::BrainConfig)
     actual_nnz = nnz(W_cpu)
     spectral_approx = norm(W_cpu) / sqrt(max(actual_nnz, 1))
     scale_factor = cfg.spectral_radius / max(spectral_approx, 1.0f-6)
-    W_cpu .*= Float16(scale_factor)
+    scale_f16 = Float16(scale_factor)
+    isfinite(scale_f16) || throw(ArgumentError(
+        "recurrent Float16 scale overflowed (scale=$scale_factor, ρ=$(cfg.spectral_radius))"))
+    W_cpu .*= scale_f16
     return W_cpu
 end
 
@@ -974,6 +979,10 @@ function _validate_ensemble_spec(taus, weights, names)
     n_lobes > 0 || throw(ArgumentError("taus must be non-empty"))
     length(weights) == n_lobes || throw(ArgumentError(
         "weights has length $(length(weights)), expected $n_lobes to match taus"))
+    for (i, wt) in enumerate(weights)
+        isfinite(Float32(wt)) || throw(ArgumentError(
+            "weights[$i] must be finite, got $wt"))
+    end
     if names !== nothing
         length(names) == n_lobes || throw(ArgumentError(
             "names has length $(length(names)), expected $n_lobes to match taus"))
