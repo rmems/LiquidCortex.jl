@@ -156,8 +156,8 @@ end
         # Reflex gating: 5× only when |signal| > 0.1.
         @test LiquidCortex._reflex_fast_eta(0.001f0, 0.0f0) == 0.001f0
         @test LiquidCortex._reflex_fast_eta(0.001f0, 0.1f0) == 0.001f0
-        @test LiquidCortex._reflex_fast_eta(0.001f0, 0.2f0) == 0.005f0
-        @test LiquidCortex._reflex_fast_eta(0.001f0, -0.2f0) == 0.005f0
+        @test LiquidCortex._reflex_fast_eta(0.001f0, 0.2f0) == 0.001f0 * 5.0f0
+        @test LiquidCortex._reflex_fast_eta(0.001f0, -0.2f0) == 0.001f0 * 5.0f0
         @test LiquidCortex._lobe_reflex_eta(1, 0.001f0, 0.005f0) == 0.005f0
         @test LiquidCortex._lobe_reflex_eta(2, 0.001f0, 0.005f0) == 0.001f0
 
