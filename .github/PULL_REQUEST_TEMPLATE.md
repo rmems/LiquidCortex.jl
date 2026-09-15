@@ -1,6 +1,14 @@
-# REVIEW.md
+## Summary
 
-## PR Review Checklist
+<!-- What does this PR change, and why? -->
+
+## Relationships
+
+- **Closes** / **Does not close** <!-- issue number -->
+- Related:
+- PRs cannot have native blocked-by/sub-issue links
+
+## Review checklist
 
 ### Code Quality
 
@@ -23,13 +31,17 @@
 
 ### Documentation
 
-- [ ] README updated if public API changed
+- [ ] README / docs updated if public API changed
 - [ ] Docstrings match actual function signatures
-- [ ] CHANGELOG.md updated for user-facing changes
-- [ ] AGENTS.md updated if build/test commands changed
+- [ ] `CHANGELOG.md` updated for user-facing changes
+- [ ] `AGENTS.md` updated if build/test commands changed
 
 ### Breaking Changes
 
-- [ ] Documented in PR description
-- [ ] Version bump in `Project.toml` if applicable
+- [ ] Documented in PR description and `CHANGELOG.md`
+- [ ] Version bump in `Project.toml` if applicable (`0.x` breaking → minor)
 - [ ] Migration notes for downstream consumers
+
+## Test plan
+
+- [ ] `julia --project -e 'using Pkg; Pkg.test()'` (CPU; GPU gated)

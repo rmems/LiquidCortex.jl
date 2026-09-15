@@ -1,0 +1,89 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - '**'
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# PRs only build. Deploy secrets stay off pull_request so same-repo PR
+# code cannot read DOCUMENTER_KEY / a write-capable GITHUB_TOKEN.
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  docs:
+    name: Build docs
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+
+      - name: Install docs dependencies
+        run: |
+          julia --project=docs -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
+          '
+
+      - name: Build
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: "1"
+        run: julia --project=docs docs/make.jl
+
+  deploy:
+    name: Build and deploy
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+
+      - name: Install docs dependencies
+        run: |
+          julia --project=docs -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
+          '
+
+      - name: Build and deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+          JULIA_PKG_PRECOMPILE_AUTO: "1"
+        run: julia --project=docs docs/make.jl

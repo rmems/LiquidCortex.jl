@@ -1,0 +1,20 @@
+# CI-pinned Manifest (Julia 1.13)
+
+Root `Manifest.toml` stays gitignored so library consumers resolve freely.
+CI copies this file into the project before `Pkg.instantiate()` so the
+self-hosted GPU runner, ubuntu-latest smoke job, and (until #69 lands) the
+Codecov workflow resolve the same 1.13 closure instead of floating against
+General.
+
+## Regenerate
+
+Use Julia **1.13** (the CI channel):
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.update()'
+cp Manifest.toml .github/ci-manifest/Manifest.toml
+```
+
+`Pkg.instantiate()` with this Manifest must keep `julia_version = "1.13.0"`
+(or whatever CI currently runs). A 1.10/1.11 Manifest will not satisfy the
+1.13 jobs.
