@@ -22,4 +22,6 @@ jobs:
       - uses: JuliaRegistries/TagBot@cded32665b34ca0496d3ac10a67d08ddfc726963 # v1.25.11
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          changelog: CHANGELOG.md
+          # SSH so the tag push can trigger documentation.yml (GITHUB_TOKEN
+          # events do not start new workflows). Same deploy key as Documenter.
+          ssh: ${{ secrets.DOCUMENTER_KEY }}
