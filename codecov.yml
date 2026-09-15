@@ -1,22 +1,17 @@
-# Coverage for this package is measured on `ubuntu-latest`, which has no GPU.
-# The majority of the test suite is gated behind `LiquidCortex._cuda_available[]`,
-# so the reported percentage describes only the CPU-reachable slice of the
-# package rather than the program that actually ships. See issue #55.
+# Coverage flags:
+# - `julia` — CPU-reachable slice (ubuntu-latest), including host-side kernels
+#   extracted from `_step_impl!` / STDP / ensemble (see issue #55)
+# - `julia-gpu` — reservoir dynamics from the self-hosted GPU runner (#68)
 #
-# Until GPU coverage is uploaded from `gpu-ci.yml` and merged with a flag, the
-# project and patch statuses are informational: they still report a number and
-# annotate the diff, but they do not fail a pull request. Without this, any
-# change touching GPU-only code (the constructors, `_step_impl!`, the STDP
-# kernel, the diagnostics helpers) reports 0% patch coverage through no fault of
-# the change itself.
-#
-# Revisit when #55 lands: drop `informational` and set real targets.
+# Project uses `auto` so a drop relative to the base is a real regression.
+# Patch target is the extracted host kernels plus any GPU-flagged lines.
 
 coverage:
   status:
     project:
       default:
-        informational: true
+        target: auto
+        threshold: 5%
     patch:
       default:
-        informational: true
+        target: 50%
