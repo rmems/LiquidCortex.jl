@@ -2,6 +2,9 @@ Manifest.toml
 *.jld2
 *.mem
 *.log
+*.cov
+lcov.info
+
 
 # Local environment variables (contains secrets — never commit)
 .env
