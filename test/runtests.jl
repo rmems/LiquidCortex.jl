@@ -133,6 +133,10 @@ end
             taus=Float32[10.0], weights=Float32[NaN32])
         @test_throws ArgumentError EnsembleBrain(;
             taus=Float32[10.0], weights=Float32[Inf32])
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[10.0, NaN32], weights=Float32[0.5, 0.5])
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[10.0, 0.0], weights=Float32[0.5, 0.5])
 
         err = try
             SparseBrain(0.0f0)
@@ -182,6 +186,7 @@ end
         @test_throws ArgumentError BrainConfig(refrac_t=-1)
         @test_throws ArgumentError BrainConfig(tau_trace=0)
         @test_throws ArgumentError BrainConfig(w_max=0)
+        @test_throws ArgumentError BrainConfig(w_max=70_000)
         @test_throws ArgumentError BrainConfig(max_inhibition=-1)
         @test_throws ArgumentError BrainConfig(v_rest=NaN32)
         @test_throws ArgumentError BrainConfig(dt=Inf32)
@@ -212,6 +217,14 @@ end
             N=16, conn_prob=0.0, rng=Random.Xoshiro(1)))
         @test nnz(emptyW) == 0
         @test size(emptyW) == (16, 16)
+        oneW = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+            N=1, conn_prob=1.0, rng=Random.Xoshiro(1)))
+        @test nnz(oneW) == 0
+        @test !any(isnan, nonzeros(oneW))
+        fullW = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+            N=20, conn_prob=1.0, rng=Random.Xoshiro(1)))
+        @test nnz(fullW) == 20 * 19
+        @test all(isfinite, nonzeros(fullW))
         @test LiquidCortex._uses_device_rng(Random.Xoshiro(1)) == false
         @test LiquidCortex._uses_device_rng(Random.default_rng()) == false
     end

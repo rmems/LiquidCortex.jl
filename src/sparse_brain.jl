@@ -91,12 +91,12 @@ do not `BoundsError` in [`compute_reservoir_covariance!`](@ref).
 - `tau_trace`: STDP eligibility decay
 - `w_max`: weight clamp for STDP / readout Hebbian
 - `inhibition_gain`, `max_inhibition`: public `inhibition` kwarg scaling
-- `rng`: `AbstractRNG` used for topology, weight init, host noise, and
+- `rng`: host `AbstractRNG` used for topology, weight init, host noise, and
   covariance subsampling. Default is `Random.default_rng()` (same
   `Random.seed!` path as before). Pass `Random.Xoshiro(seed)` to isolate
-  the reservoir from unrelated `rand` calls. CUDA device noise
-  (`use_device_noise=true` or a `CUDA.RNG`) is seeded with `CUDA.seed!`,
-  not `Random.seed!`.
+  the reservoir from unrelated `rand` calls. A CUDA device generator is
+  not valid here — use `use_device_noise=true` on [`step!`](@ref), which
+  is seeded with `CUDA.seed!`, not `Random.seed!`.
 
 # Examples
 ```julia
@@ -150,8 +150,8 @@ function _validate_brain_config(
         "tau_trace must be positive and finite, got $tau_trace"))
     dt < tau_trace || throw(ArgumentError(
         "dt must be < tau_trace so eligibility traces decay (got dt=$dt, tau_trace=$tau_trace)"))
-    (isfinite(w_max) && w_max > 0) || throw(ArgumentError(
-        "w_max must be positive and finite, got $w_max"))
+    (isfinite(w_max) && 0 < w_max <= floatmax(Float16)) || throw(ArgumentError(
+        "w_max must be finite, > 0, and ≤ floatmax(Float16), got $w_max"))
     isfinite(inhibition_gain) || throw(ArgumentError(
         "inhibition_gain must be finite, got $inhibition_gain"))
     (isfinite(max_inhibition) && max_inhibition >= 0) || throw(ArgumentError(
@@ -199,6 +199,8 @@ function BrainConfig(;
     ig = Float32(inhibition_gain)
     mi = Float32(max_inhibition)
     _validate_brain_config(n, cp, rho, dt32, hd, cov, vr, vt, vreset, sig, rt, tt, wm, ig, mi)
+    _uses_device_rng(rng) && throw(ArgumentError(
+        "BrainConfig.rng must be a host RNG; pass use_device_noise=true to step! for CUDA device noise"))
     return BrainConfig(n, cp, rho, dt32, hd, min(cov, n), vr, vt, vreset, sig, rt, tt, wm, ig, mi, rng)
 end
 
@@ -232,25 +234,27 @@ end
 """
     _generate_recurrent_cpu(cfg) -> SparseMatrixCSC{Float16,Int}
 
-CPU-side sparse recurrent matrix: Bernoulli-ish COO draw, zero diagonal,
-then Frobenius / √nnz scaling toward `cfg.spectral_radius`. Uses `cfg.rng`.
+CPU-side sparse recurrent matrix: independent Bernoulli edges at
+`cfg.conn_prob` (`sprand`), zero diagonal, then Frobenius / √nnz scaling
+toward `cfg.spectral_radius`. Uses `cfg.rng`.
 """
 function _generate_recurrent_cpu(cfg::BrainConfig)
     n = cfg.N
-    nnz_expected = round(Int, n * n * cfg.conn_prob)
-    if nnz_expected <= 0
+    p = cfg.conn_prob
+    if p <= 0 || n <= 1
         return spzeros(Float16, n, n)
     end
     rng = cfg.rng
-    rows = rand(rng, 1:n, nnz_expected)
-    cols = rand(rng, 1:n, nnz_expected)
-    vals = Float16.(randn(rng, Float32, nnz_expected) .* 0.02f0)
-    W_cpu = sparse(rows, cols, vals, n, n)
+    W_cpu = sprand(rng, n, n, p, (r, len) -> Float16.(randn(r, Float32, len) .* 0.02f0))
     @inbounds for i in 1:n
         W_cpu[i, i] = Float16(0)
     end
+    dropzeros!(W_cpu)
     actual_nnz = nnz(W_cpu)
-    spectral_approx = norm(W_cpu) / sqrt(max(actual_nnz, 1))
+    actual_nnz == 0 && return W_cpu
+    frob = norm(W_cpu)
+    (frob > 0 && isfinite(frob)) || return W_cpu
+    spectral_approx = frob / sqrt(actual_nnz)
     scale_factor = cfg.spectral_radius / max(spectral_approx, 1.0f-6)
     scale_f16 = Float16(scale_factor)
     isfinite(scale_f16) || throw(ArgumentError(
@@ -732,8 +736,8 @@ Execute one OU-SDE simulation timestep on a single lobe.
 - `record_history`: write spike history row (default `true`).
 - `use_device_noise`: force CUDA's device RNG (default `false`, host samples
   from `brain.cfg.rng`). `true` uses `CUDA.default_rng()`, which is seeded
-  by `CUDA.seed!` — not `Random.seed!`. A `CUDA.RNG` stored on `cfg.rng`
-  also selects the device path without this flag.
+  by `CUDA.seed!` — not `Random.seed!`. `BrainConfig.rng` must remain a
+  host generator so topology init can run on CPU.
 
 Runtime exceptions are captured to Sentry (when configured) before rethrow.
 API misuse raises `LiquidCortexValidationError` and is not reported to Sentry.
@@ -979,6 +983,13 @@ function _validate_ensemble_spec(taus, weights, names)
     n_lobes > 0 || throw(ArgumentError("taus must be non-empty"))
     length(weights) == n_lobes || throw(ArgumentError(
         "weights has length $(length(weights)), expected $n_lobes to match taus"))
+    tau32 = Vector{Float32}(undef, n_lobes)
+    for i in 1:n_lobes
+        t = Float32(taus[i])
+        (isfinite(t) && t > 0) || throw(ArgumentError(
+            "taus[$i] must be positive and finite, got $(taus[i])"))
+        tau32[i] = t
+    end
     for (i, wt) in enumerate(weights)
         isfinite(Float32(wt)) || throw(ArgumentError(
             "weights[$i] must be finite, got $wt"))
@@ -987,7 +998,7 @@ function _validate_ensemble_spec(taus, weights, names)
         length(names) == n_lobes || throw(ArgumentError(
             "names has length $(length(names)), expected $n_lobes to match taus"))
     end
-    return n_lobes
+    return n_lobes, tau32
 end
 
 function _ensemble_lobe_names(n_lobes::Int, names)
@@ -1004,16 +1015,15 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16,
     weights::AbstractVector{<:Real}=LOBE_WEIGHTS,
     names::Union{Nothing,AbstractVector}=nothing)
     _validate_lobe_dims(n_in, n_out)
-    n_lobes = _validate_ensemble_spec(taus, weights, names)
+    n_lobes, tau32 = _validate_ensemble_spec(taus, weights, names)
     lobe_names = _ensemble_lobe_names(n_lobes, names)
     w = Float32[Float32(x) for x in weights]
     @debug "[ensemble] Initializing $(n_lobes) lobes × $(cfg.N) = $(n_lobes * cfg.N) neurons"
 
     lobes = SparseBrain[]
     for i in 1:n_lobes
-        tau = Float32(taus[i])
-        @debug "[ensemble] Lobe $i/$(n_lobes): $(lobe_names[i]) (τ_m=$(tau)ms)"
-        push!(lobes, SparseBrain(tau; cfg=cfg, n_in=n_in, n_out=n_out, name=lobe_names[i]))
+        @debug "[ensemble] Lobe $i/$(n_lobes): $(lobe_names[i]) (τ_m=$(tau32[i])ms)"
+        push!(lobes, SparseBrain(tau32[i]; cfg=cfg, n_in=n_in, n_out=n_out, name=lobe_names[i]))
     end
 
     agg_output = CUDA.zeros(Float32, n_out)
