@@ -14,7 +14,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 ## Architecture
 
 - `src/LiquidCortex.jl` — Module definition, exports, `__init__`
-- `src/sparse_brain.jl` — SparseBrain (65k neurons/lobe), EnsembleBrain (4 lobes), `step!()`, STDP
+- `src/sparse_brain.jl` — SparseBrain / EnsembleBrain / BrainConfig, `step!()`, STDP
 - `src/reference_lsm.jl` — 2,048-neuron reference reservoir (lazy-init, configurable dims)
 - `test/runtests.jl` — Test suite (CPU + GPU tests gated by `_cuda_available`)
 
@@ -24,7 +24,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - No domain-specific code in core (market/mining removed in PR #12)
 - Generic inhibition interface: `step!(brain::SparseBrain, u::CuVector{Float32}; inhibition::Real=0.0, reflex_eta::Real=ETA)`
 - Step kwargs: `plasticity=:readout_only` (default), `:recurrent_stdp`, `:none`; plus `sync`, `record_history`, `use_device_noise`, `recurrent_eta`
-- Configurable dimensions: `SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="default")`
+- Configurable dimensions: `SparseBrain(tau_m::Float32; cfg::BrainConfig=BrainConfig(), n_in::Int=14, n_out::Int=16, name::String="default")` — `BrainConfig` carries `N`, connectivity, spectral radius, LIF/STDP knobs, and `rng`
 - Compat: CUDA.jl `6` (latest); local TDD/verify on Julia 1.13
 
 ## Testing

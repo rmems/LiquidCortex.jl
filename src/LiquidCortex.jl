@@ -6,9 +6,12 @@
 GPU-accelerated sparse Liquid State Machine for neuromorphic computing.
 
 Provides two LSM implementations:
-- **EnsembleBrain** (`sparse_brain.jl`) — 4-lobe, 65,536-neuron/lobe sparse CUDA LSM
-  with OU-SDE dynamics, STDP covariance learning, and rolling 1,000-tick spike history.
-  Configurable input/output dimensions. Requires RTX-class GPU with ≥14 GB VRAM.
+- **EnsembleBrain** (`sparse_brain.jl`) — multi-lobe sparse CUDA LSM
+  with OU-SDE dynamics, STDP covariance learning, and rolling spike history.
+  Reservoir size, connectivity, LIF parameters, and RNG are set via
+  `BrainConfig` (defaults: 65,536 neurons/lobe, 4 lobes).
+  Configurable input/output dimensions. Default ensemble requires RTX-class
+  GPU with ≥14 GB VRAM.
 
 - **Reference LSM** (`reference_lsm.jl`) — 2,048-neuron dense CUDA reservoir for
   rapid prototyping. Configurable input/output dimensions.
@@ -160,7 +163,7 @@ include("reference_lsm.jl")
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-export SparseBrain, EnsembleBrain
+export SparseBrain, EnsembleBrain, BrainConfig
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
 export enable_telemetry!
