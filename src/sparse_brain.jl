@@ -258,7 +258,7 @@ function SparseBrain(tau_m::Real; n_in::Int=14, n_out::Int=16, name::AbstractStr
     tau_m = Float32(tau_m)
     _validate_lobe_dims(n_in, n_out)
     _validate_tau_m(tau_m)
-    _require_cuda("SparseBrain"; vram="14 GB")
+    _require_cuda("SparseBrain"; min_vram_gb=14)
     name = String(name)
     @debug "[brain:$name] Initializing 65,536-neuron lobe (τ_m=$(tau_m)ms, in=$(n_in), out=$(n_out))..."
 
@@ -615,7 +615,12 @@ function step!(brain::SparseBrain, u::AbstractVector;
     sync::Bool=true,
     record_history::Bool=true,
     use_device_noise::Bool=false)
-    _upload_input!(brain.u_buf, u)
+    try
+        _upload_input!(brain.u_buf, u)
+    catch exc
+        _capture_runtime_exception(exc, catch_backtrace())
+        rethrow()
+    end
     return step!(brain, brain.u_buf;
         inhibition=inhibition,
         reflex_eta=reflex_eta,
@@ -867,7 +872,7 @@ y = get_ensemble_output(ensemble)             # Vector{Float32} of length 4
 """
 function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
     _validate_lobe_dims(n_in, n_out)
-    _require_cuda("EnsembleBrain"; vram="14 GB")
+    _require_cuda("EnsembleBrain"; min_vram_gb=14)
     @debug "[ensemble] Initializing $(N_LOBES) lobes × $(N) = $(N_LOBES * N) neurons"
 
     lobes = SparseBrain[]
@@ -1026,9 +1031,15 @@ function ensemble_step!(eb::EnsembleBrain, u::AbstractVector;
     sync::Bool=true,
     record_history::Bool=true,
     use_device_noise::Bool=false)
-    isempty(eb.lobes) && throw(LiquidCortexValidationError("EnsembleBrain has no lobes"))
-    dest = eb.lobes[1].u_buf
-    _upload_input!(dest, u)
+    dest = try
+        isempty(eb.lobes) && throw(LiquidCortexValidationError("EnsembleBrain has no lobes"))
+        buf = eb.lobes[1].u_buf
+        _upload_input!(buf, u)
+        buf
+    catch exc
+        _capture_runtime_exception(exc, catch_backtrace())
+        rethrow()
+    end
     return ensemble_step!(eb, dest;
         inhibition=inhibition,
         reflex_eta=reflex_eta,

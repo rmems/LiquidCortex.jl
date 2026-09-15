@@ -159,12 +159,17 @@ end
     return nothing
 end
 
-# Fail before any host COO / device allocation. `vram` is included when the
-# object has a documented VRAM floor (SparseBrain / EnsembleBrain: ≥14 GB).
-function _require_cuda(context::AbstractString; vram::Union{Nothing,String}=nothing)
-    _cuda_available[] && return nothing
-    extra = vram === nothing ? "" : " with ≥$(vram) VRAM"
-    error("$context requires a CUDA GPU$extra. No CUDA device available.")
+# Fail before any host COO / device allocation. `min_vram_gb` is the
+# documented floor for SparseBrain / EnsembleBrain (≥14 GB).
+function _require_cuda(context::AbstractString; min_vram_gb::Union{Nothing,Real}=nothing)
+    extra = min_vram_gb === nothing ? "" : " with ≥$(min_vram_gb) GB VRAM"
+    if !_cuda_available[]
+        error("$context requires a CUDA GPU$extra. No CUDA device available.")
+    end
+    min_vram_gb === nothing && return nothing
+    total_gb = CUDA.total_memory() / 1e9
+    total_gb >= Float64(min_vram_gb) && return nothing
+    error("$context requires a CUDA GPU$extra. This device reports $(round(total_gb; digits=1)) GB.")
 end
 
 # ── GPU source files (structs defined at load; GPU allocations deferred to
