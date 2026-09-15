@@ -155,8 +155,12 @@ end
         @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 4, 4]) === nothing
         @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 5, 4]) == (Int64(4), 3, Int64(5))
         LiquidCortex._assert_ticks_synchronized(Int64[0, 0, 0, 0])
+        LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized=false)
         @test_throws LiquidCortex.EnsembleDesynchronizedError (
             LiquidCortex._assert_ticks_synchronized(Int64[1, 1, 0, 1])
+        )
+        @test_throws LiquidCortex.EnsembleDesynchronizedError (
+            LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized=true)
         )
         err = try
             LiquidCortex._assert_ticks_synchronized(Int64[1, 2])
@@ -167,6 +171,14 @@ end
         @test occursin("desynchronized", err.msg)
         @test occursin("lobe 2", err.msg)
         @test LiquidCortex._should_capture_runtime_exception(err) == true
+        poisoned = try
+            LiquidCortex._assert_ensemble_clocks(Int64[4, 4, 4, 4]; desynchronized=true)
+        catch e
+            e
+        end
+        @test poisoned isa LiquidCortex.EnsembleDesynchronizedError
+        @test occursin("unusable", poisoned.msg)
+        @test LiquidCortex._should_capture_runtime_exception(poisoned) == true
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
@@ -282,6 +294,7 @@ end
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 14
             @test ensemble.lobes[1].n_out == 16
+            @test ensemble.desynchronized == false
             ensemble = nothing; reclaim_gpu_hard!()
         end
 
@@ -292,6 +305,7 @@ end
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 8
             @test ensemble.lobes[1].n_out == 4
+            @test ensemble.desynchronized == false
             ensemble = nothing; reclaim_gpu_hard!()
         end
 
@@ -325,18 +339,36 @@ end
 
                 saved_agg = copy(Array(ensemble.agg_output))
                 saved_weights = copy(ensemble.weights)
+                @test ensemble.desynchronized == false
                 ensemble.weights = saved_weights[1:2]
                 @test_throws BoundsError LiquidCortex._commit_ensemble_aggregate!(ensemble)
                 @test Array(ensemble.agg_output) == saved_agg
+                @test ensemble.desynchronized == false
                 ensemble.weights = saved_weights
 
                 ensemble.lobes[3].tick_count += 1
                 @test_throws LiquidCortex.EnsembleDesynchronizedError (
                     ensemble_step!(ensemble, u_act; plasticity=:none)
                 )
+                @test ensemble.desynchronized == false
                 @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
                 @test Array(ensemble.agg_output) == saved_agg
                 @test ensemble.lobes[3].tick_count == ensemble.lobes[1].tick_count + 1
+                @test startswith(ensemble_diagnostics(ensemble), "[DESYNC]")
+
+                ensemble.lobes[3].tick_count -= 1
+                ensemble.weights = saved_weights[1:2]
+                ticks_before_poison = [l.tick_count for l in ensemble.lobes]
+                @test_throws BoundsError ensemble_step!(ensemble, u_act; plasticity=:none)
+                @test ensemble.desynchronized
+                @test all(l.tick_count == ticks_before_poison[i] for (i, l) in enumerate(ensemble.lobes))
+                @test Array(ensemble.agg_output) == saved_agg
+                ensemble.weights = saved_weights
+                @test_throws LiquidCortex.EnsembleDesynchronizedError (
+                    ensemble_step!(ensemble, u_act; plasticity=:none)
+                )
+                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
+                @test startswith(ensemble_diagnostics(ensemble), "[DESYNC]")
             finally
                 ensemble = nothing
                 reclaim_gpu_hard!()
