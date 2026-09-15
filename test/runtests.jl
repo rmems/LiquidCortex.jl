@@ -3,6 +3,7 @@
 using Test
 using LiquidCortex
 using CUDA
+using Sentry
 using LinearAlgebra: norm
 
 # Free VRAM between heavy GPU cases (65k lobes / ensembles leave large pools).
@@ -74,7 +75,8 @@ end
         exports = names(LiquidCortex; all=false)
         for sym in [:SparseBrain, :EnsembleBrain,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
-                    :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics]
+                    :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
+                    :enable_telemetry!]
             @test sym in exports
         end
     end
@@ -104,6 +106,23 @@ end
             LiquidCortex.LiquidCortexValidationError("x")) == false
         @test LiquidCortex._should_capture_runtime_exception(ErrorException("x")) == true
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
+    end
+
+    @testset "CPU: Sentry opt-in" begin
+        @test !LiquidCortex._sentry_dsn_usable("")
+        @test !LiquidCortex._sentry_dsn_usable("http://abc@host/1")
+        @test !LiquidCortex._sentry_dsn_usable("not-a-dsn")
+        @test LiquidCortex._sentry_dsn_usable("https://abcdef1234567890@a12345.us.sentry.io/1234567890123456789")
+        @test_throws LiquidCortex.LiquidCortexValidationError enable_telemetry!("http://abc@host/1")
+        @test_throws LiquidCortex.LiquidCortexValidationError enable_telemetry!("not-a-dsn")
+        if isempty(get(ENV, "LIQUIDCORTEX_SENTRY_DSN", ""))
+            @test LiquidCortex._sentry_enabled[] == false
+        end
+        tags = LiquidCortex._runtime_exception_tags(ErrorException("x"))
+        @test tags["package"] == "LiquidCortex.jl"
+        @test tags["gpu_failure"] == "false"
+        @test tags["error_class"] == "runtime"
+        @test !haskey(Sentry.global_tags, "error_class")
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.

@@ -40,18 +40,12 @@ function __init__()
               "Core types will load, but step! and GPU operations require a CUDA device."
     end
 
-    # Initialize Sentry error capture if DSN is configured
-    dsn = get(ENV, "SENTRY_DSN", "")
+    # Opt-in only: never consume the process-wide SENTRY_DSN (that hijacks a
+    # consumer's hub). See enable_telemetry! / LIQUIDCORTEX_SENTRY_DSN.
+    dsn = get(ENV, "LIQUIDCORTEX_SENTRY_DSN", "")
     if !isempty(dsn)
         try
-            pv = Base.pkgversion(@__MODULE__)
-            version = pv === nothing ? "unknown" : string(pv)
-            Sentry.init(dsn; release="LiquidCortex.jl@$version")
-            Sentry.set_tag("package", "LiquidCortex.jl")
-            Sentry.set_tag("version", version)
-            Sentry.set_tag("julia_version", string(VERSION))
-            _sentry_enabled[] = true
-            @info "LiquidCortex: Sentry error capture enabled."
+            enable_telemetry!(dsn)
         catch e
             @warn "LiquidCortex: Failed to initialize Sentry" exception=(e, catch_backtrace())
         end
@@ -71,50 +65,90 @@ Base.showerror(io::IO, e::LiquidCortexValidationError) =
 # raises MethodError and masks the original failure path.
 #
 # Never block the rethrow path: Sentry.jl enqueues via a bounded Channel(100),
-# so a full backlog (network outage / burst of failures) would hang step! /
-# ensemble_step! before rethrow if capture were synchronous. Schedule capture
-# asynchronously and only wait briefly; drop waiting (and leave the task
-# running best-effort) if the queue is blocked.
+# so a full backlog would hang step! / ensemble_step! if capture were
+# synchronous. Schedule capture and return immediately (no timedwait poll).
 @noinline function _should_capture_runtime_exception(@nospecialize(exc))
     return !(exc isa LiquidCortexValidationError)
 end
 
-# Sentry.jl tags are process-global. Serialize tag+capture so concurrent async
-# captures cannot cross-label each other's events.
-const _sentry_capture_lock = ReentrantLock()
-
-@noinline function _tag_runtime_exception!(@nospecialize(exc))
-    if exc isa CUDA.OutOfGPUMemoryError
-        Sentry.set_tag("gpu_failure", "true")
-        Sentry.set_tag("error_class", "gpu_oom")
-    elseif exc isa CUDA.CuError
-        Sentry.set_tag("gpu_failure", "true")
-        Sentry.set_tag("error_class", "cuda_error")
-    else
-        Sentry.set_tag("gpu_failure", "false")
-        Sentry.set_tag("error_class", "runtime")
+function _sentry_dsn_usable(dsn::AbstractString)
+    startswith(dsn, "https://") || return false
+    try
+        Sentry.parse_dsn(String(dsn))
+        return true
+    catch
+        return false
     end
-    return nothing
+end
+
+function _runtime_exception_tags(@nospecialize(exc))
+    gpu_oom = exc isa CUDA.OutOfGPUMemoryError
+    cuda_err = exc isa CUDA.CuError
+    return Dict{String,String}(
+        "package" => "LiquidCortex.jl",
+        "gpu_failure" => (gpu_oom || cuda_err) ? "true" : "false",
+        "error_class" => gpu_oom ? "gpu_oom" : (cuda_err ? "cuda_error" : "runtime"),
+    )
+end
+
+function _sentry_runtime_event(@nospecialize(exc), bt, tags)
+    frames = map(Base.scrub_repl_backtrace(bt)) do frame
+        Dict(:filename => frame.file, :function => frame.func, :lineno => frame.line)
+    end
+    formatted = Dict(
+        :type => typeof(exc).name.name,
+        :module => string(typeof(exc).name.module),
+        :value => hasproperty(exc, :msg) ? exc.msg : sprint(showerror, exc),
+        :stacktrace => (; frames=reverse(frames)),
+    )
+    return Sentry.Event(; exception=(; values=[formatted]), level="error", tags=tags)
+end
+
+"""
+    enable_telemetry!(dsn) -> Bool
+
+Opt in to Sentry capture for this package.
+
+Does **not** read `ENV["SENTRY_DSN"]` — that variable belongs to the host
+application. Pass a DSN or set `LIQUIDCORTEX_SENTRY_DSN` before `using`.
+Skips (returns `false`) when `Sentry.main_hub` is already initialized so a
+consumer's client is not overwritten. HTTPS-only.
+
+# Examples
+```julia
+using LiquidCortex
+enable_telemetry!(ENV["LIQUIDCORTEX_SENTRY_DSN"])
+```
+"""
+function enable_telemetry!(dsn::AbstractString)
+    _sentry_dsn_usable(dsn) || throw(LiquidCortexValidationError(
+        "Sentry DSN must be an https:// URL, got $(repr(dsn))"))
+    if Sentry.main_hub.initialised
+        @warn "LiquidCortex: Sentry hub already initialized; skipping package init."
+        return false
+    end
+    pv = Base.pkgversion(@__MODULE__)
+    version = pv === nothing ? "unknown" : string(pv)
+    Sentry.init(String(dsn); release="LiquidCortex.jl@$version")
+    _sentry_enabled[] = true
+    @info "LiquidCortex: Sentry error capture enabled."
+    return true
 end
 
 @noinline function _capture_runtime_exception(@nospecialize(exc), bt)
     _sentry_enabled[] || return nothing
     _should_capture_runtime_exception(exc) || return nothing
+    tags = _runtime_exception_tags(exc)
     try
-        t = @async begin
+        @async begin
             try
-                lock(_sentry_capture_lock) do
-                    _tag_runtime_exception!(exc)
-                    Sentry.capture_exception([(exc, bt)])
-                end
+                Sentry.capture_event(_sentry_runtime_event(exc, bt, tags))
             catch sentry_error
                 @warn "LiquidCortex: Failed to capture exception in Sentry" exception=(sentry_error, catch_backtrace())
             end
         end
-        # Best-effort window for format+enqueue; never hang rethrow on a full queue.
-        timedwait(() -> istaskdone(t), 0.05; pollint=0.005)
     catch
-        # Drop capture entirely if scheduling/wait itself fails.
+        # Drop capture entirely if scheduling itself fails.
     end
     return nothing
 end
@@ -129,6 +163,7 @@ include("reference_lsm.jl")
 export SparseBrain, EnsembleBrain
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
+export enable_telemetry!
 
 # Warm method inference at install time. Do **not** construct SparseBrain or
 # EnsembleBrain here: each lobe is 65,536 neurons, `Pkg.test()` re-precompiles

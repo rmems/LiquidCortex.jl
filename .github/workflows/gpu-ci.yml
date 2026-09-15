@@ -35,8 +35,9 @@ jobs:
     timeout-minutes: 60
 
     env:
-      # Optional: report step! failures to liquidcortex project during CI
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      # Optional: report step! failures to liquidcortex during CI (package-specific
+      # env so a generic SENTRY_DSN cannot hijack a consumer's Sentry hub).
+      LIQUIDCORTEX_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       JULIA_NUM_THREADS: "1"
       JULIA_PKG_PRECOMPILE_AUTO: "1"
 
