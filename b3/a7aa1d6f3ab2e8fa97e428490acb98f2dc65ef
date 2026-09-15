@@ -1,0 +1,19 @@
+src/sparse_brain.jl
+  s_d6b5da8627ad68::t_daf102079f5c15 224-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b3a7aa1d6f3ab2e8fa97e428490acb98f2dc65ef",
+  "prompts": {},
+  "sessions": {
+    "s_d6b5da8627ad68": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "255bab1b-2f7f-4afe-a334-2fdf3778e206",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
