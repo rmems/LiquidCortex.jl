@@ -195,6 +195,18 @@ mutable struct SparseBrain
     last_spike_rate::Float32
 end
 
+function _validate_lobe_dims(n_in::Int, n_out::Int)
+    n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
+    n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
+    return nothing
+end
+
+function _validate_tau_m(tau_m::Float32)
+    (isfinite(tau_m) && tau_m > 0) || throw(ArgumentError(
+        "tau_m must be positive and finite, got $tau_m"))
+    return nothing
+end
+
 """
     SparseBrain(tau_m; n_in=14, n_out=16, name="default") -> SparseBrain
 
@@ -208,7 +220,9 @@ Weight initialization:
     (Breaks zero-readout deadlock — reservoir produces signals from tick 1)
 
 # Arguments
-- `tau_m::Float32`: membrane time constant in milliseconds
+- `tau_m::Float32`: membrane time constant in milliseconds (must be
+  positive and finite). `0`, negatives, `NaN`, and `Inf` would otherwise
+  fill `V` with `NaN` on the first tick.
 
 # Keyword Arguments
 - `n_in::Int=14`: input dimension (must be positive)
@@ -228,8 +242,8 @@ step!(brain, u; inhibition=0.5f0)
 ```
 """
 function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="default")
-    n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
-    n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
+    _validate_lobe_dims(n_in, n_out)
+    _validate_tau_m(tau_m)
     @debug "[brain:$name] Initializing 65,536-neuron lobe (τ_m=$(tau_m)ms, in=$(n_in), out=$(n_out))..."
 
     xavier_std_in = sqrt(2.0f0 / Float32(n_in))
@@ -740,6 +754,7 @@ y = get_ensemble_output(ensemble)             # Vector{Float32} of length 4
 ```
 """
 function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
+    _validate_lobe_dims(n_in, n_out)
     @debug "[ensemble] Initializing $(N_LOBES) lobes × $(N) = $(N_LOBES * N) neurons"
 
     lobes = SparseBrain[]

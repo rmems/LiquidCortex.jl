@@ -106,6 +106,29 @@ end
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
     end
 
+    @testset "CPU: SparseBrain constructor validation" begin
+        # Guards run before any host COO draw or CUDA allocation, so these
+        # are CPU-safe. Exception type is pinned to ArgumentError to match
+        # n_in/n_out and the reference LSM (not LiquidCortexValidationError).
+        @test_throws ArgumentError SparseBrain(0.0f0)
+        @test_throws ArgumentError SparseBrain(-1.0f0)
+        @test_throws ArgumentError SparseBrain(NaN32)
+        @test_throws ArgumentError SparseBrain(Inf32)
+        @test_throws ArgumentError SparseBrain(20.0f0; n_in=0)
+        @test_throws ArgumentError SparseBrain(20.0f0; n_out=-3)
+        @test_throws ArgumentError EnsembleBrain(; n_in=0)
+        @test_throws ArgumentError EnsembleBrain(; n_out=0)
+
+        err = try
+            SparseBrain(0.0f0)
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("tau_m", err.msg)
+        @test LiquidCortex._should_capture_runtime_exception(err) == true
+    end
+
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
     @testset "Reference LSM" begin
         if LiquidCortex._cuda_available[]
