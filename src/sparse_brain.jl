@@ -654,8 +654,8 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
 
     mul!(brain.I_ext, brain.W_in, u)
 
-    # Host noise is the portable default; device RNG when requested or when
-    # `cfg.rng` is a CUDA generator. Device RNG is seeded with `CUDA.seed!`.
+    # Host noise is the portable default; `use_device_noise=true` uses
+    # CUDA.default_rng() (seeded with CUDA.seed!).
     _fill_noise!(brain; use_device_noise=use_device_noise)
     brain.noise .*= _ou_noise_scale(cfg)
 
