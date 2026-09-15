@@ -5,6 +5,8 @@ using LiquidCortex
 using CUDA
 using Sentry
 using LinearAlgebra: norm
+using Random
+using SparseArrays
 
 # Free VRAM between heavy GPU cases (65k lobes / ensembles leave large pools).
 function reclaim_gpu!()
@@ -73,7 +75,7 @@ end
     @testset "Public API is exported" begin
         # Verify each name is both defined AND exported (not just defined)
         exports = names(LiquidCortex; all=false)
-        for sym in [:SparseBrain, :EnsembleBrain,
+        for sym in [:SparseBrain, :EnsembleBrain, :BrainConfig,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
                     :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
                     :enable_telemetry!]
@@ -120,6 +122,13 @@ end
         @test_throws ArgumentError SparseBrain(20.0f0; n_out=-3)
         @test_throws ArgumentError EnsembleBrain(; n_in=0)
         @test_throws ArgumentError EnsembleBrain(; n_out=0)
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[10.0], weights=Float32[0.5, 0.5])
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[], weights=Float32[])
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[10.0, 20.0], weights=Float32[0.5, 0.5],
+            names=["only-one"])
 
         err = try
             SparseBrain(0.0f0)
@@ -129,6 +138,75 @@ end
         @test err isa ArgumentError
         @test occursin("tau_m", err.msg)
         @test LiquidCortex._should_capture_runtime_exception(err) == true
+    end
+
+    @testset "CPU: BrainConfig defaults, validation, RNG isolation" begin
+        cfg = BrainConfig()
+        @test cfg.N == LiquidCortex.N
+        @test cfg.conn_prob == LiquidCortex.CONN_PROB
+        @test cfg.spectral_radius == LiquidCortex.SPECTRAL_RADIUS
+        @test cfg.dt == LiquidCortex.DT
+        @test cfg.hist_depth == LiquidCortex.HIST_DEPTH
+        @test cfg.cov_subsample == LiquidCortex.COV_SUBSAMPLE
+        @test cfg.v_rest == LiquidCortex.V_REST
+        @test cfg.v_thresh == LiquidCortex.V_THRESH
+        @test cfg.v_reset == LiquidCortex.V_RESET
+        @test cfg.sigma == LiquidCortex.SIGMA
+        @test cfg.refrac_t == LiquidCortex.REFRAC_T
+        @test cfg.tau_trace == LiquidCortex.TAU_TRACE
+        @test cfg.w_max == LiquidCortex.W_MAX
+        @test cfg.inhibition_gain == LiquidCortex.INHIBITION_GAIN
+        @test cfg.max_inhibition == LiquidCortex.MAX_INHIBITION
+        @test cfg.rng === Random.default_rng()
+
+        small = BrainConfig(N=100, cov_subsample=8192)
+        @test small.N == 100
+        @test small.cov_subsample == 100  # clamped to N
+
+        @test_throws ArgumentError BrainConfig(N=0)
+        @test_throws ArgumentError BrainConfig(N=-8)
+        @test_throws ArgumentError BrainConfig(conn_prob=-0.1)
+        @test_throws ArgumentError BrainConfig(conn_prob=1.1)
+        @test_throws ArgumentError BrainConfig(spectral_radius=-1)
+        @test_throws ArgumentError BrainConfig(dt=0)
+        @test_throws ArgumentError BrainConfig(hist_depth=0)
+        @test_throws ArgumentError BrainConfig(cov_subsample=0)
+        @test_throws ArgumentError BrainConfig(sigma=-1)
+        @test_throws ArgumentError BrainConfig(refrac_t=-1)
+        @test_throws ArgumentError BrainConfig(tau_trace=0)
+        @test_throws ArgumentError BrainConfig(w_max=0)
+        @test_throws ArgumentError BrainConfig(max_inhibition=-1)
+        @test_throws ArgumentError BrainConfig(v_rest=NaN32)
+        @test_throws ArgumentError BrainConfig(dt=Inf32)
+
+        errN = try
+            BrainConfig(N=0)
+        catch e
+            e
+        end
+        @test errN isa ArgumentError
+        @test occursin("N must be positive", errN.msg)
+
+        W1 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+            N=64, conn_prob=0.05, rng=Random.Xoshiro(42)))
+        rand()  # pollute the global / task-local RNG
+        W2 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+            N=64, conn_prob=0.05, rng=Random.Xoshiro(42)))
+        @test W1 == W2
+        @test size(W1) == (64, 64)
+        @test W1 isa SparseMatrixCSC
+        @test all(i -> W1[i, i] == Float16(0), 1:64)
+
+        W3 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+            N=64, conn_prob=0.05, rng=Random.Xoshiro(43)))
+        @test W3 != W1
+
+        emptyW = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+            N=16, conn_prob=0.0, rng=Random.Xoshiro(1)))
+        @test nnz(emptyW) == 0
+        @test size(emptyW) == (16, 16)
+        @test LiquidCortex._uses_device_rng(Random.Xoshiro(1)) == false
+        @test LiquidCortex._uses_device_rng(Random.default_rng()) == false
     end
 
     @testset "CPU: Sentry opt-in" begin
@@ -251,7 +329,44 @@ end
             @test brain.n_out == 4
             @test length(brain.output) == 4
             @test size(brain.W_in, 2) == 8
+            @test hasproperty(brain, :cfg)
+            @test brain.cfg.N == LiquidCortex.N
             brain = nothing; reclaim_gpu!()
+        end
+
+        @testset "GPU: SparseBrain BrainConfig small N + covariance" begin
+            cfg = BrainConfig(N=128, hist_depth=8, cov_subsample=32,
+                conn_prob=0.05, rng=Random.Xoshiro(7))
+            brain = SparseBrain(20.0f0; cfg=cfg, n_in=4, n_out=2, name="cfg-small")
+            @test length(brain.V) == 128
+            @test size(brain.history) == (8, 128)
+            @test brain.cfg.cov_subsample == 32
+            u = CUDA.zeros(Float32, 4)
+            step!(brain, u; inhibition=0.2f0)
+            @test brain.tick_count == 1
+            @test all(isfinite, Array(get_output(brain)))
+            @test brain.v_thresh_dynamic > brain.cfg.v_thresh
+            for _ in 1:8
+                step!(brain, u; record_history=true)
+            end
+            @test brain.hist_full
+            result = compute_reservoir_covariance!(brain)
+            @test result !== nothing
+            C, indices = result
+            @test size(C) == (32, 32)
+            @test length(indices) == 32
+            brain = nothing; reclaim_gpu!()
+        end
+
+        @testset "GPU: seeded SparseBrain is reproducible" begin
+            make() = SparseBrain(15.0f0; n_in=3, n_out=2, name="seed",
+                cfg=BrainConfig(N=64, hist_depth=4, conn_prob=0.08,
+                    rng=Random.Xoshiro(1234)))
+            a = make()
+            b = make()
+            @test Array(a.W.nzVal) == Array(b.W.nzVal)
+            @test Array(a.W_in) == Array(b.W_in)
+            a = nothing; b = nothing; reclaim_gpu!()
         end
 
         @testset "GPU: EnsembleBrain default dims" begin
@@ -272,6 +387,22 @@ end
             @test ensemble.lobes[1].n_in == 8
             @test ensemble.lobes[1].n_out == 4
             ensemble = nothing; reclaim_gpu_hard!()
+        end
+
+        @testset "GPU: EnsembleBrain custom lobe count + small N" begin
+            cfg = BrainConfig(N=64, hist_depth=4, rng=Random.Xoshiro(9))
+            eb = EnsembleBrain(; n_in=4, n_out=2, cfg=cfg,
+                taus=Float32[10, 40], weights=Float32[0.7, 0.3],
+                names=["A", "B"])
+            @test length(eb.lobes) == 2
+            @test eb.lobe_names == ["A", "B"]
+            @test eb.lobes[1].cfg.N == 64
+            @test eb.lobes[1].tau_m == 10.0f0
+            @test eb.lobes[2].tau_m == 40.0f0
+            u = CUDA.zeros(Float32, 4)
+            ensemble_step!(eb, u; inhibition=0.1f0)
+            @test length(get_ensemble_output(eb)) == 2
+            eb = nothing; reclaim_gpu!()
         end
 
         @testset "GPU: step! with generic inhibition" begin
