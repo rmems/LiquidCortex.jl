@@ -1,0 +1,19 @@
+.github/workflows/gpu-ci.yml
+  s_3b1549956b2dbb::t_2e090f2c705a6c 72,91,93,99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a4db710f2604522768516c296a33819afacb89dd",
+  "prompts": {},
+  "sessions": {
+    "s_3b1549956b2dbb": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c3579500-a345-45a3-a95a-4a898a9368a3",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
