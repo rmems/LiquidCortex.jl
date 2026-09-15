@@ -141,6 +141,8 @@ function _readout_hebbian_update!(W_out, output, trace_pre, reflex_eta::Float32,
 end
 
 function _validate_csc(colPtr::AbstractVector{<:Integer}, edge_nnz::Int)
+    isempty(colPtr) &&
+        throw(ArgumentError("Malformed CSC: empty colPtr"))
     colPtr[1] == 1 ||
         throw(ArgumentError("Malformed CSC: colPtr[1]=$(colPtr[1]), expected 1"))
     colPtr[end] == edge_nnz + 1 ||

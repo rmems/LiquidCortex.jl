@@ -219,6 +219,7 @@ end
         pre, post = LiquidCortex._csc_edge_lists(colPtr, rowVal)
         @test pre == Int32[1, 3, 3]
         @test post == Int32[1, 1, 2]
+        @test_throws ArgumentError LiquidCortex._validate_csc(Int[], 0)
         @test_throws ArgumentError LiquidCortex._validate_csc([2, 2], 0)
         @test_throws ArgumentError LiquidCortex._validate_csc([1, 5], 3)
         @test_throws ArgumentError LiquidCortex._validate_csc([1, 3, 2, 4], 3)
