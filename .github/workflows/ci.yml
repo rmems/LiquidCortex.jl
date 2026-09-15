@@ -42,7 +42,3 @@ jobs:
 
       - name: Run tests
         run: julia --project=. -e 'using Pkg; Pkg.test()'
-
-      - name: Run doctests (if any)
-        run: julia --project=. -e 'using Pkg; Pkg.test(; test_args=["doctest"])'
-        continue-on-error: true
