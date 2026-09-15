@@ -1,0 +1,38 @@
+src/brain_lifecycle.jl
+  s_4425d9b60f986e::t_2ac460d7dfe4db 1-130
+examples/brain_standalone.jl
+  s_4425d9b60f986e::t_b12a8e0c3b57e9 37
+  s_4425d9b60f986e::t_85a87b5cfca8c6 23-25
+src/LiquidCortex.jl
+  s_4425d9b60f986e::t_e2918e84f43250 159,167
+  s_4425d9b60f986e::t_a77abe432f78ec 182-183,187-188
+test/runtests.jl
+  s_4425d9b60f986e::t_e44c7839ad8054 235
+  s_4425d9b60f986e::t_060b2cd75fd8f9 255
+  s_4425d9b60f986e::t_9d6be5241f603f 79
+  s_4425d9b60f986e::t_c96f635240f22b 245
+  s_4425d9b60f986e::t_918a332c1ecb22 225,317,332,346,356,366,377
+  s_4425d9b60f986e::t_7f7f115904e5ee 261,265-281
+  s_4425d9b60f986e::t_3161aa645d9a12 82-85
+  s_4425d9b60f986e::t_1cfc31b423c6ed 301-303,306-307
+  s_4425d9b60f986e::t_ccc07987010470 304-305,308
+  s_4425d9b60f986e::t_c07f720487b62e 398
+README.md
+  s_4425d9b60f986e::t_837f041f7b5ad7 67-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c45b4f8aca331f44c874f9981d6c6f640b1611fa",
+  "prompts": {},
+  "sessions": {
+    "s_4425d9b60f986e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6ecb4e94-b6b7-45e8-babc-46c4d850e61c",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
