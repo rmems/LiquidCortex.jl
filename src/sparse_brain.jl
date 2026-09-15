@@ -203,7 +203,12 @@ mutable struct SparseBrain
 
     # Hide the auto-generated all-fields positional constructor (it otherwise
     # dominates MethodError "closest candidates" with an unreadable wall).
+    # `new(args...)` would otherwise accept a prefix and leave later fields
+    # undefined (`SparseBrain(Val(:new))` must not succeed).
     function SparseBrain(::Val{:new}, args...)
+        n = fieldcount(SparseBrain)
+        length(args) == n || throw(ArgumentError(
+            "internal SparseBrain constructor expected $n fields, got $(length(args))"))
         return new(args...)
     end
 end

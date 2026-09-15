@@ -154,6 +154,13 @@ end
             length(sig.parameters)
         end
         @test nfields(SparseBrain) + 1 ∉ ctor_nargs
+        err_partial = try
+            SparseBrain(Val(:new))
+        catch e
+            e
+        end
+        @test err_partial isa ArgumentError
+        @test occursin("fields", err_partial.msg)
     end
 
     @testset "CPU: CUDA guard fails fast (no COO draw)" begin
