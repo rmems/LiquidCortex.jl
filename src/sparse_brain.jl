@@ -105,6 +105,9 @@ A 65,536-neuron sparse CUDA reservoir lobe with OU-SDE membrane dynamics,
 STDP-capable recurrent weights, and a dense readout.
 
 Requires a CUDA GPU. Construct with `SparseBrain(tau_m; n_in, n_out, name)`.
+Reuse a lobe across trials with [`reset!`](@ref); release device memory with
+[`free!`](@ref). A constructor `finalizer` also returns buffers to the CUDA.jl
+pool when the object is collected.
 
 # Fields
 - `W::CuSparseMatrixCSC{Float16,Int32}`: sparse recurrent weights (1% connectivity)
@@ -207,6 +210,11 @@ function _validate_tau_m(tau_m::Float32)
     return nothing
 end
 
+# Methods live in brain_lifecycle.jl. Declared here so constructors can
+# register `finalizer` without a forward-reference at call time.
+function _free_device_buffers! end
+function _free_ensemble_agg! end
+
 """
     SparseBrain(tau_m; n_in=14, n_out=16, name="default") -> SparseBrain
 
@@ -229,6 +237,9 @@ Weight initialization:
 - `n_in::Int=14`: input dimension (must be positive)
 - `n_out::Int=16`: readout dimension (must be positive)
 - `name::String="default"`: label used in constructor progress logs
+
+A `finalizer` is registered so GC can return device buffers if the caller
+never calls [`free!`](@ref). Prefer explicit `free!` when peak VRAM matters.
 
 # Returns
 - `SparseBrain`: GPU-resident lobe ready for [`step!`](@ref)
@@ -317,7 +328,7 @@ function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="
     CUDA.synchronize()
     @debug "[brain:$name] ✓ Lobe initialized (τ_m=$(tau_m)ms)"
 
-    SparseBrain(
+    brain = SparseBrain(
         W_gpu, pre_idx, post_idx, edge_nnz,
         W_in, W_out,
         V, S, refrac,
@@ -330,6 +341,10 @@ function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="
         Float32(V_THRESH),
         0, 0, 0.0f0
     )
+    # GC fallback: CuArray finalizers also run, and CUDA.unsafe_free! is
+    # a no-op after the first call. Explicit `free!` is still the
+    # deterministic path before constructing another large reservoir.
+    return finalizer(_free_device_buffers!, brain)
 end
 
 const PLASTICITY_MODES = (:readout_only, :recurrent_stdp, :none)
@@ -712,6 +727,10 @@ Weights are `LOBE_WEIGHTS = Float32[0.4, 0.3, 0.2, 0.1]` (copied into `weights`)
 - `agg_output::CuVector{Float32}`: weighted-sum readout (`n_out`)
 - `weights::Vector{Float32}`: per-lobe aggregation weights (sum to 1.0)
 
+Reuse an ensemble across trials with [`reset!`](@ref); release device memory
+with [`free!`](@ref). The constructor `finalizer` only frees `agg_output`;
+each lobe has its own `SparseBrain` finalizer.
+
 # Examples
 ```julia
 using LiquidCortex, CUDA
@@ -774,7 +793,11 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
     @debug @sprintf("[ensemble] ✓ All %d lobes online — %d total neurons", N_LOBES, N_LOBES * N)
     @debug @sprintf("[ensemble] VRAM: %.2f / %.2f GB (%.0f%% used)", used, total_mem, used / total_mem * 100)
 
-    EnsembleBrain(lobes, copy(LOBE_NAMES), agg_output, copy(LOBE_WEIGHTS))
+    eb = EnsembleBrain(lobes, copy(LOBE_NAMES), agg_output, copy(LOBE_WEIGHTS))
+    # Only the ensemble-owned readout. Each lobe already has its own
+    # SparseBrain finalizer; freeing lobes here would use-after-free a
+    # lobe the caller extracted with `eb.lobes[i]` after dropping `eb`.
+    return finalizer(_free_ensemble_agg!, eb)
 end
 
 # Internal implementation; public entry point is `ensemble_step!` (with Sentry capture).
