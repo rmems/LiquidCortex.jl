@@ -413,9 +413,10 @@ function _validate_step_kwargs!(brain::SparseBrain, u::AbstractVector;
     return nothing
 end
 
-"""Advance `hist_idx` / `tick_count` after GPU work has succeeded."""
+"""Write history (optional) and advance `hist_idx` / `tick_count` after GPU work has succeeded."""
 function _commit_lobe_clock!(brain::SparseBrain, upcoming_tick::Int64, record_history::Bool)
     if record_history
+        brain.history[brain.hist_idx, :] .= brain.S
         brain.hist_idx += 1
         if brain.hist_idx > HIST_DEPTH
             brain.hist_idx = 1
@@ -508,11 +509,8 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     # ── 5. Readout ───────────────────────────────────────────────────────────
     mul!(brain.output, brain.W_out, brain.S)
 
-    # Write history before the optional device barrier. Advance clocks only
-    # after a successful synchronize so a failed tick does not count.
-    if record_history
-        brain.history[brain.hist_idx, :] .= brain.S
-    end
+    # Device barrier (when requested) before committing clocks or history so
+    # a failed tick does not count and does not overwrite a history row.
     sync && CUDA.synchronize()
     commit_clock && _commit_lobe_clock!(brain, upcoming_tick, record_history)
     return nothing
@@ -902,9 +900,10 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
             end
         end
 
-        # Step all lobes without committing clocks or mid-lobe sync. Clocks
-        # advance together after aggregate + optional device barrier so a
-        # later CUDA.synchronize() failure cannot look like a completed tick.
+        # Step all lobes without committing clocks, history, or mid-lobe sync.
+        # Clocks and history advance together after aggregate + optional device
+        # barrier so a later CUDA.synchronize() failure cannot look like a
+        # completed tick or leave a ghost history row.
         for (i, lobe) in enumerate(eb.lobes)
             eta_lobe = (i == 1) ? reflex_fast : reflex_eta  # Lobe 1 = Fast
             _step_impl!(lobe, u;
