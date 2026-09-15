@@ -16,14 +16,12 @@ function reclaim_gpu!()
     return nothing
 end
 
-# Full device reset — required between EnsembleBrain cases on 16GB cards.
-# Soft reclaim leaves the memory pool reserved (~2GB leak per ensemble in CI).
+# CUDA.jl 6 made `device_reset!` a documented no-op (depwarn only). GPU
+# cases call `free!` so the ~0.5–2 GB per reservoir returns to the pool
+# instead of waiting on CuArray finalizers. This helper then syncs and
+# reclaims; the old hard reset is gone.
 function reclaim_gpu_hard!()
     reclaim_gpu!()
-    try
-        CUDA.device_reset!()
-    catch
-    end
     return nothing
 end
 
@@ -76,9 +74,13 @@ end
         for sym in [:SparseBrain, :EnsembleBrain,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
                     :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
-                    :enable_telemetry!]
+                    :reset!, :free!, :enable_telemetry!]
             @test sym in exports
         end
+        @test hasmethod(reset!, Tuple{SparseBrain})
+        @test hasmethod(reset!, Tuple{EnsembleBrain})
+        @test hasmethod(free!, Tuple{SparseBrain})
+        @test hasmethod(free!, Tuple{EnsembleBrain})
     end
 
     @testset "Removed domain symbols are NOT exported" begin
@@ -106,6 +108,13 @@ end
             LiquidCortex.LiquidCortexValidationError("x")) == false
         @test LiquidCortex._should_capture_runtime_exception(ErrorException("x")) == true
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
+    end
+
+    @testset "CPU: reset! kwargs" begin
+        LiquidCortex._validate_reset_kwargs(; keep_weights=true)
+        @test_throws LiquidCortex.LiquidCortexValidationError (
+            LiquidCortex._validate_reset_kwargs(; keep_weights=false)
+        )
     end
 
     @testset "CPU: SparseBrain constructor validation" begin
@@ -241,7 +250,7 @@ end
             @test brain.tick_count == 0
             @test brain.n_in == 14
             @test brain.n_out == 16
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: SparseBrain custom dims" begin
@@ -251,7 +260,7 @@ end
             @test brain.n_out == 4
             @test length(brain.output) == 4
             @test size(brain.W_in, 2) == 8
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: EnsembleBrain default dims" begin
@@ -261,7 +270,7 @@ end
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 14
             @test ensemble.lobes[1].n_out == 16
-            ensemble = nothing; reclaim_gpu_hard!()
+            free!(ensemble); reclaim_gpu_hard!()
         end
 
         @testset "GPU: EnsembleBrain custom dims" begin
@@ -271,16 +280,36 @@ end
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 8
             @test ensemble.lobes[1].n_out == 4
-            ensemble = nothing; reclaim_gpu_hard!()
+            free!(ensemble); reclaim_gpu_hard!()
         end
 
         @testset "GPU: step! with generic inhibition" begin
             brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="step-test")
             u = CUDA.zeros(Float32, 8)
+            W0 = copy(Array(brain.W_out))
             step!(brain, u; inhibition=0.5f0)
             @test brain.tick_count == 1
             @test brain.v_thresh_dynamic > LiquidCortex.V_THRESH
-            brain = nothing; reclaim_gpu!()
+            reset!(brain)
+            @test brain.tick_count == 0
+            @test brain.total_spikes == 0
+            @test brain.last_spike_rate == 0.0f0
+            @test brain.hist_idx == 1
+            @test brain.hist_full == false
+            @test brain.v_thresh_dynamic == LiquidCortex.V_THRESH
+            @test CUDA.minimum(brain.V) == LiquidCortex.V_REST
+            @test CUDA.maximum(brain.V) == LiquidCortex.V_REST
+            @test iszero(CUDA.maximum(abs, brain.S))
+            @test iszero(CUDA.maximum(abs, brain.output))
+            @test iszero(CUDA.maximum(abs, brain.trace_pre))
+            @test iszero(CUDA.maximum(abs, brain.history))
+            @test Array(brain.W_out) == W0
+            @test_throws LiquidCortex.LiquidCortexValidationError reset!(brain; keep_weights=false)
+            step!(brain, u; inhibition=0.1f0)
+            @test brain.tick_count == 1
+            free!(brain)
+            free!(brain)  # idempotent
+            reclaim_gpu!()
         end
 
         @testset "GPU: ensemble_step! inhibition + plasticity=:none freeze" begin
@@ -300,7 +329,14 @@ end
             end
             @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
             @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
-            ensemble = nothing; reclaim_gpu_hard!()
+            reset!(ensemble)
+            @test all(l.tick_count == 0 for l in ensemble.lobes)
+            @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
+            @test iszero(CUDA.maximum(abs, ensemble.agg_output))
+            @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
+            free!(ensemble)
+            free!(ensemble)  # idempotent
+            reclaim_gpu_hard!()
         end
 
         @testset "GPU: default step! advances tick and keeps finite output" begin
@@ -309,7 +345,7 @@ end
             step!(brain, u; inhibition=0.1f0)
             @test brain.tick_count == 1
             @test all(isfinite, Array(get_output(brain)))
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: plasticity=:none freezes W_out" begin
@@ -324,7 +360,7 @@ end
             @test_throws LiquidCortex.LiquidCortexValidationError step!(brain, u; plasticity=:typo)
             @test_throws LiquidCortex.LiquidCortexValidationError step!(
                 brain, u; plasticity=:recurrent_stdp, recurrent_eta=NaN32)
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: plasticity=:readout_only can update W_out" begin
@@ -338,7 +374,7 @@ end
             @test brain.tick_count == 50
             @test all(isfinite, Array(get_output(brain)))
             @test !all(Array(brain.W_out) .== W0)
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: record_history=false steps without filling history" begin
@@ -348,7 +384,7 @@ end
             @test brain.tick_count == 1
             @test brain.hist_full == false
             @test brain.hist_idx == 1
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: sync=false advances tick (caller may sync)" begin
@@ -358,7 +394,7 @@ end
             CUDA.synchronize()
             @test brain.tick_count == 1
             @test all(isfinite, Array(get_output(brain)))
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: use_device_noise=true stays finite" begin
@@ -369,7 +405,7 @@ end
             end
             @test brain.tick_count == 20
             @test all(isfinite, Array(get_output(brain)))
-            brain = nothing; reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: recurrent_stdp mutates sparse W.nzVal" begin
@@ -390,10 +426,7 @@ end
             end
             @test Array(brain.W.nzVal) != w0
             @test all(isfinite, Array(get_output(brain)))
-            # Drop lazy STDP edge buffers before reclaim
-            brain.pre_idx = CUDA.zeros(Int32, 0)
-            brain.post_idx = CUDA.zeros(Int32, 0)
-            brain = nothing; reclaim_gpu_hard!()
+            free!(brain); reclaim_gpu_hard!()
         end
     else
         @info "Skipping GPU tests — no CUDA device available"
