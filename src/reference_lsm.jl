@@ -61,6 +61,7 @@ length(y) == 4
 function _init_ref_lsm!(; n_in::Int=REF_IN_DEFAULT, n_out::Int=REF_OUT_DEFAULT)
     n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
     n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
+    _require_cuda("Reference LSM")
     _ref_W[] = cpu_randn_cu(REF_N, REF_N) .* 0.02f0
     _ref_Win[] = cpu_randn_cu(REF_N, n_in) .* 0.5f0
     _ref_Wout[] = cpu_randn_cu(n_out, REF_N) .* 0.1f0
@@ -111,8 +112,7 @@ function run_lsm_step(inputs_vec::Vector{Float32}, inhibit_val::Float32;
     n_out::Int=REF_OUT_DEFAULT)
     # Lazy initialization on first call
     if !_ref_is_initialized()
-        LiquidCortex._cuda_available[] || error(
-            "Reference LSM requires a CUDA GPU. No CUDA device available.")
+        _require_cuda("Reference LSM")
         _init_ref_lsm!(; n_in=length(inputs_vec), n_out=n_out)
     end
 
