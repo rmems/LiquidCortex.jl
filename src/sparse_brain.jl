@@ -221,8 +221,9 @@ Weight initialization:
 
 # Arguments
 - `tau_m::Float32`: membrane time constant in milliseconds (must be
-  positive and finite). `0`, negatives, `NaN`, and `Inf` would otherwise
-  fill `V` with `NaN` on the first tick.
+  positive and finite). All of `0`, negatives, `NaN`, and `Inf` are
+  rejected. `V` starts at `V_REST`, so the first membrane term is
+  `0 / tau_m`; only `0` and `NaN` make that term `NaN`.
 
 # Keyword Arguments
 - `n_in::Int=14`: input dimension (must be positive)
