@@ -25,6 +25,9 @@ Pkg.add(url="https://github.com/rmems/LiquidCortex.jl")
 
 ## Quick start
 
+This example needs a CUDA device. On CPU-only hosts, `using LiquidCortex`
+succeeds but `SparseBrain` / `step!` will fail until a GPU is present.
+
 ```julia
 using LiquidCortex, CUDA
 
