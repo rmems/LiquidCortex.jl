@@ -423,7 +423,7 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     record_history::Bool=true,
     use_device_noise::Bool=false)
     _validate_step_kwargs!(brain, u; plasticity=plasticity, recurrent_eta=recurrent_eta)
-    brain.tick_count += 1
+    upcoming_tick = brain.tick_count + 1
     inhibition = Float32(inhibition)
     reflex_eta = Float32(reflex_eta)
     recurrent_eta = Float32(recurrent_eta)
@@ -476,7 +476,25 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
         brain.last_spike_rate = n_spikes / N
     end
 
-    # ── 4. Optional history ──────────────────────────────────────────────────
+    # ── 4. Traces + learning ─────────────────────────────────────────────────
+    brain.trace_pre .= brain.trace_pre .* (1.0f0 - DT / TAU_TRACE) .+ brain.S
+    brain.trace_post .= brain.trace_post .* (1.0f0 - DT / TAU_TRACE) .+ brain.S
+
+    if plasticity === :recurrent_stdp
+        _apply_pair_stdp!(brain; eta=recurrent_eta)
+    end
+
+    if plasticity !== :none && upcoming_tick % 10 == 0
+        S_out = brain.output .> 0.0f0
+        dW_out = reflex_eta .* (Float32.(S_out) * brain.trace_pre')
+        brain.W_out .+= dW_out
+        clamp!(brain.W_out, -W_MAX, W_MAX)
+    end
+
+    # ── 5. Readout ───────────────────────────────────────────────────────────
+    mul!(brain.output, brain.W_out, brain.S)
+
+    # Commit clocks last so a failed tick does not count as completed.
     if record_history
         brain.history[brain.hist_idx, :] .= brain.S
         brain.hist_idx += 1
@@ -485,24 +503,7 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
             brain.hist_full = true
         end
     end
-
-    # ── 5. Traces + learning ─────────────────────────────────────────────────
-    brain.trace_pre .= brain.trace_pre .* (1.0f0 - DT / TAU_TRACE) .+ brain.S
-    brain.trace_post .= brain.trace_post .* (1.0f0 - DT / TAU_TRACE) .+ brain.S
-
-    if plasticity === :recurrent_stdp
-        _apply_pair_stdp!(brain; eta=recurrent_eta)
-    end
-
-    if plasticity !== :none && brain.tick_count % 10 == 0
-        S_out = brain.output .> 0.0f0
-        dW_out = reflex_eta .* (Float32.(S_out) * brain.trace_pre')
-        brain.W_out .+= dW_out
-        clamp!(brain.W_out, -W_MAX, W_MAX)
-    end
-
-    # ── 6. Readout ───────────────────────────────────────────────────────────
-    mul!(brain.output, brain.W_out, brain.S)
+    brain.tick_count = upcoming_tick
 
     sync && CUDA.synchronize()
     return nothing
@@ -729,6 +730,64 @@ mutable struct EnsembleBrain
 end
 
 """
+    EnsembleDesynchronizedError <: Exception
+
+Lobe `tick_count`s disagree, so aggregated output would mix simulated times.
+Raised by [`ensemble_step!`](@ref) and [`get_ensemble_output`](@ref).
+"""
+struct EnsembleDesynchronizedError <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::EnsembleDesynchronizedError) =
+    print(io, "EnsembleDesynchronizedError: ", e.msg)
+
+function _ensemble_tick_mismatch(ticks::AbstractVector{<:Integer})
+    isempty(ticks) && return nothing
+    t0 = Int64(first(ticks))
+    for i in eachindex(ticks)
+        ti = Int64(ticks[i])
+        ti == t0 && continue
+        return (t0, Int(i), ti)
+    end
+    return nothing
+end
+
+function _assert_ticks_synchronized(ticks::AbstractVector{<:Integer})
+    mismatch = _ensemble_tick_mismatch(ticks)
+    mismatch === nothing && return nothing
+    t0, i, ti = mismatch
+    throw(EnsembleDesynchronizedError(
+        "ensemble lobes desynchronized: lobe 1 tick=$(t0), lobe $i tick=$(ti)"))
+end
+
+function _assert_ensemble_synchronized!(eb::EnsembleBrain)
+    isempty(eb.lobes) && return nothing
+    t0 = eb.lobes[1].tick_count
+    for i in 2:length(eb.lobes)
+        ti = eb.lobes[i].tick_count
+        if ti != t0
+            throw(EnsembleDesynchronizedError(
+                "ensemble lobes desynchronized: lobe 1 tick=$(t0), lobe $i tick=$(ti)"))
+        end
+    end
+    return nothing
+end
+
+function _commit_ensemble_aggregate!(eb::EnsembleBrain)
+    prev = copy(eb.agg_output)
+    try
+        eb.agg_output .= 0.0f0
+        for (i, lobe) in enumerate(eb.lobes)
+            eb.agg_output .+= eb.weights[i] .* lobe.output
+        end
+    catch
+        copyto!(eb.agg_output, prev)
+        rethrow()
+    end
+    return nothing
+end
+
+"""
     EnsembleBrain(; n_in=14, n_out=16) -> EnsembleBrain
 
 Initialize 4 parallel lobes × 65,536 neurons = 262,144 total neurons on GPU.
@@ -801,6 +860,7 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
     # Validate once before any STDP edge prewarm (avoids large allocs on bad kwargs).
     isempty(eb.lobes) || _validate_step_kwargs!(eb.lobes[1], u;
         plasticity=plasticity, recurrent_eta=recurrent_eta)
+    _assert_ensemble_synchronized!(eb)
 
     # Prewarm STDP edge lists before the async lobe loop so the first
     # :recurrent_stdp ensemble step does not host-sync mid-loop per lobe.
@@ -823,11 +883,10 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
             use_device_noise=use_device_noise)
     end
 
-    # Aggregate readouts: weighted sum across lobes
-    eb.agg_output .= 0.0f0
-    for (i, lobe) in enumerate(eb.lobes)
-        eb.agg_output .+= eb.weights[i] .* lobe.output
-    end
+    # Aggregate readouts: weighted sum across lobes. Restore the previous
+    # complete vector if this loop throws, so get_ensemble_output is never
+    # a partial sum.
+    _commit_ensemble_aggregate!(eb)
 
     # Diagnostics deferred to end of ensemble (lobes used sync=false).
     if sync
@@ -865,6 +924,8 @@ Mid-lobe `CUDA.synchronize()` is suppressed; one sync runs after aggregation
 when `sync=true`. Spike-rate host reductions also run only when `sync=true`.
 
 Runtime exceptions are captured to Sentry (when configured) before rethrow.
+If lobe `tick_count`s disagree, raises [`EnsembleDesynchronizedError`](@ref)
+before any lobe is stepped.
 
 # Returns
 - `Nothing`: read the aggregated readout with [`get_ensemble_output`](@ref)
@@ -909,6 +970,9 @@ end
 
 Copy the weighted-sum ensemble readout from GPU to CPU.
 
+Raises [`EnsembleDesynchronizedError`](@ref) if lobe clocks disagree, so a
+caller cannot silently read a mix of simulated times.
+
 # Arguments
 - `eb::EnsembleBrain`: ensemble whose `agg_output` is copied
 
@@ -925,6 +989,7 @@ length(y) == 4
 ```
 """
 function get_ensemble_output(eb::EnsembleBrain)
+    _assert_ensemble_synchronized!(eb)
     return Array(eb.agg_output)
 end
 

@@ -73,7 +73,7 @@ end
     @testset "Public API is exported" begin
         # Verify each name is both defined AND exported (not just defined)
         exports = names(LiquidCortex; all=false)
-        for sym in [:SparseBrain, :EnsembleBrain,
+        for sym in [:SparseBrain, :EnsembleBrain, :EnsembleDesynchronizedError,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
                     :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
                     :enable_telemetry!]
@@ -146,6 +146,27 @@ end
         @test tags["gpu_failure"] == "false"
         @test tags["error_class"] == "runtime"
         @test !haskey(Sentry.global_tags, "error_class")
+    end
+
+    @testset "CPU: ensemble clock desync detection" begin
+        # Production change that would fail this: dropping the mismatch helper
+        # or treating a distinct lobe tick as synchronized.
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[]) === nothing
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 4, 4]) === nothing
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 5, 4]) == (Int64(4), 3, Int64(5))
+        LiquidCortex._assert_ticks_synchronized(Int64[0, 0, 0, 0])
+        @test_throws LiquidCortex.EnsembleDesynchronizedError (
+            LiquidCortex._assert_ticks_synchronized(Int64[1, 1, 0, 1])
+        )
+        err = try
+            LiquidCortex._assert_ticks_synchronized(Int64[1, 2])
+        catch e
+            e
+        end
+        @test err isa LiquidCortex.EnsembleDesynchronizedError
+        @test occursin("desynchronized", err.msg)
+        @test occursin("lobe 2", err.msg)
+        @test LiquidCortex._should_capture_runtime_exception(err) == true
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
@@ -288,19 +309,56 @@ end
             # (a second EnsembleBrain late in the suite OOMs on 16GB after pool growth).
             reclaim_gpu_hard!()
             ensemble = EnsembleBrain(n_in=8, n_out=4)
-            u = CUDA.zeros(Float32, 8)
-            ensemble_step!(ensemble, u; inhibition=0.3f0, reflex_signal=0.2f0)
-            output = get_ensemble_output(ensemble)
-            @test length(output) == 4
-            W0 = [copy(Array(l.W_out)) for l in ensemble.lobes]
-            u_act = cu(randn(Float32, 8) .* 0.2f0)
-            n_steps = 5
-            for _ in 1:n_steps
-                ensemble_step!(ensemble, u_act; plasticity=:none, inhibition=0.1f0)
+            try
+                u = CUDA.zeros(Float32, 8)
+                ensemble_step!(ensemble, u; inhibition=0.3f0, reflex_signal=0.2f0)
+                output = get_ensemble_output(ensemble)
+                @test length(output) == 4
+                W0 = [copy(Array(l.W_out)) for l in ensemble.lobes]
+                u_act = cu(randn(Float32, 8) .* 0.2f0)
+                n_steps = 5
+                for _ in 1:n_steps
+                    ensemble_step!(ensemble, u_act; plasticity=:none, inhibition=0.1f0)
+                end
+                @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
+
+                saved_agg = copy(Array(ensemble.agg_output))
+                saved_weights = copy(ensemble.weights)
+                ensemble.weights = saved_weights[1:2]
+                @test_throws BoundsError LiquidCortex._commit_ensemble_aggregate!(ensemble)
+                @test Array(ensemble.agg_output) == saved_agg
+                ensemble.weights = saved_weights
+
+                ensemble.lobes[3].tick_count += 1
+                @test_throws LiquidCortex.EnsembleDesynchronizedError (
+                    ensemble_step!(ensemble, u_act; plasticity=:none)
+                )
+                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
+                @test Array(ensemble.agg_output) == saved_agg
+                @test ensemble.lobes[3].tick_count == ensemble.lobes[1].tick_count + 1
+            finally
+                ensemble = nothing
+                reclaim_gpu_hard!()
             end
-            @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
-            @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
-            ensemble = nothing; reclaim_gpu_hard!()
+        end
+
+        @testset "GPU: failed step! does not commit tick or history" begin
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-clock-last")
+            u = CUDA.zeros(Float32, 8)
+            tick0 = brain.tick_count
+            hist0 = brain.hist_idx
+            CUDA.unsafe_free!(brain.W_out)
+            threw = false
+            try
+                step!(brain, u)
+            catch
+                threw = true
+            end
+            @test threw
+            @test brain.tick_count == tick0
+            @test brain.hist_idx == hist0
+            brain = nothing; reclaim_gpu!()
         end
 
         @testset "GPU: default step! advances tick and keeps finite output" begin
