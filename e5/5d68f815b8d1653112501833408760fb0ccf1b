@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_3b1549956b2dbb::t_c267ba9da5456c 43-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e55d68f815b8d1653112501833408760fb0ccf1b",
+  "prompts": {},
+  "sessions": {
+    "s_3b1549956b2dbb": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c3579500-a345-45a3-a95a-4a898a9368a3",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
