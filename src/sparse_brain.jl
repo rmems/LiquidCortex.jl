@@ -1213,13 +1213,22 @@ println(ensemble_diagnostics(ensemble))
 # [Fast:τ=10] tick=1 rate=…% W=… | [Medium:τ=25] tick=1 rate=…% W=… | …
 ```
 """
+# `%g` keeps integer taus as `10` and fractional ones as `12.5` without
+# `Int(tau_m)`, which throws `InexactError` for non-integer membrane constants.
+function _ensemble_diag_line(name::AbstractString, tau_m::Real, tick_count::Integer,
+                             last_spike_rate::Real, w_out_norm::Real)
+    rate_pct = round(last_spike_rate * 100, digits=2)
+    w_norm = round(Float64(w_out_norm), digits=4)
+    return @sprintf("[%s:τ=%g] tick=%d rate=%.2f%% W=%.4f",
+        name, tau_m, tick_count, rate_pct, w_norm)
+end
+
 function ensemble_diagnostics(eb::EnsembleBrain)
     lines = String[]
     for (i, lobe) in enumerate(eb.lobes)
-        rate_pct = round(lobe.last_spike_rate * 100, digits=2)
-        w_norm = round(Float64(norm(lobe.W_out)), digits=4)
-        push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
-            eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
+        push!(lines, _ensemble_diag_line(
+            eb.lobe_names[i], lobe.tau_m, lobe.tick_count,
+            lobe.last_spike_rate, Float64(norm(lobe.W_out))))
     end
     return join(lines, " | ")
 end

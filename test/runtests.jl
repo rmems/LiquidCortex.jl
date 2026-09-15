@@ -227,6 +227,15 @@ end
         @test all(isfinite, nonzeros(fullW))
         @test LiquidCortex._uses_device_rng(Random.Xoshiro(1)) == false
         @test LiquidCortex._uses_device_rng(Random.default_rng()) == false
+
+        # Fractional τ is legal after BrainConfig; diagnostics must not Int() it.
+        frac = LiquidCortex._ensemble_diag_line("A", 12.5f0, 3, 0.0123, 1.23456)
+        @test occursin("[A:τ=12.5]", frac)
+        @test occursin("tick=3", frac)
+        @test occursin("rate=1.23%", frac)
+        @test occursin("W=1.2346", frac)
+        @test LiquidCortex._ensemble_diag_line("Fast", 10.0f0, 1, 0.0, 0.0) ==
+            "[Fast:τ=10] tick=1 rate=0.00% W=0.0000"
     end
 
     @testset "CPU: Sentry opt-in" begin
@@ -412,16 +421,19 @@ end
         @testset "GPU: EnsembleBrain custom lobe count + small N" begin
             cfg = BrainConfig(N=64, hist_depth=4, rng=Random.Xoshiro(9))
             eb = EnsembleBrain(; n_in=4, n_out=2, cfg=cfg,
-                taus=Float32[10, 40], weights=Float32[0.7, 0.3],
+                taus=Float32[12.5, 37.5], weights=Float32[0.7, 0.3],
                 names=["A", "B"])
             @test length(eb.lobes) == 2
             @test eb.lobe_names == ["A", "B"]
             @test eb.lobes[1].cfg.N == 64
-            @test eb.lobes[1].tau_m == 10.0f0
-            @test eb.lobes[2].tau_m == 40.0f0
+            @test eb.lobes[1].tau_m == 12.5f0
+            @test eb.lobes[2].tau_m == 37.5f0
             u = CUDA.zeros(Float32, 4)
             ensemble_step!(eb, u; inhibition=0.1f0)
             @test length(get_ensemble_output(eb)) == 2
+            diag = ensemble_diagnostics(eb)
+            @test occursin("[A:τ=12.5]", diag)
+            @test occursin("[B:τ=37.5]", diag)
             eb = nothing; reclaim_gpu!()
         end
 
