@@ -1,0 +1,34 @@
+.env.example
+  s_1ac49762cb43f5::t_e322536337710c 9,14-16
+test/runtests.jl
+  s_1ac49762cb43f5::t_089894d51c33ed 78-79
+  s_1ac49762cb43f5::t_57a268c8a03468 111-127
+  s_1ac49762cb43f5::t_7a7bf6553fc156 6
+src/LiquidCortex.jl
+  s_1ac49762cb43f5::t_876c0e4d5da457 43-45,48
+  s_1ac49762cb43f5::t_89ba99a9ac50d7 166
+  s_1ac49762cb43f5::t_c51e4763a04998 124-125
+  s_1ac49762cb43f5::t_8e7b2b84b33a47 68-69,74-80,82-123,126-135,141,143,145,151
+README.md
+  s_1ac49762cb43f5::t_3602cf68e78dfd 70
+AGENTS.md
+  s_1ac49762cb43f5::t_78f53ba2edda22 53-55
+.github/workflows/gpu-ci.yml
+  s_1ac49762cb43f5::t_0df18eec1d1776 38-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "efddbe3700a78d12a8684c6515ed607f236100ec",
+  "prompts": {},
+  "sessions": {
+    "s_1ac49762cb43f5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7dc9def4-7ef5-4d2b-93a2-e497ecbb9f5e",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
