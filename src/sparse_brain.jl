@@ -230,6 +230,7 @@ Float32 Gaussian samples on the host (from `rng`) and uploading them.
 function cpu_randn_cu(rng::AbstractRNG, dims::Integer...)
     return cu(randn(rng, Float32, Int.(dims)...))
 end
+cpu_randn_cu(dims::Integer...) = cpu_randn_cu(Random.default_rng(), dims...)
 
 """
     _generate_recurrent_cpu(cfg) -> SparseMatrixCSC{Float16,Int}
