@@ -1,0 +1,35 @@
+test/runtests.jl
+  s_740421ffb2aed4::t_cca8e70f2dea22 323-324,326-333,335-338
+  s_740421ffb2aed4::t_9e4b98f2a62f65 128-148
+  s_740421ffb2aed4::t_14081887b8c864 76
+  s_740421ffb2aed4::t_e08f9493488a4a 289-301,303-308,310-320
+  s_740421ffb2aed4::t_4f3e457a1507b9 302,309
+src/LiquidCortex.jl
+  s_740421ffb2aed4::t_84558c6d594c5c 163
+src/sparse_brain.jl
+  s_740421ffb2aed4::t_316216f9d46d23 411
+  s_740421ffb2aed4::t_e2d7afa7ebee8c 870-873
+  s_740421ffb2aed4::t_0c03fdc5f4ec62 976
+  s_740421ffb2aed4::t_ee26b67589de0a 464,472,479,482-491
+  s_740421ffb2aed4::t_cc82dd6939f14b 718-748,758-774
+  s_740421ffb2aed4::t_a9d503baa8ed04 749-757
+  s_740421ffb2aed4::t_c0f67d915bb591 911-912
+  s_740421ffb2aed4::t_c016bb683959ca 957-959
+  s_740421ffb2aed4::t_2356f37edf641b 847
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "eaf9af6a91715ac4e30e236f726bbcd1c9aff744",
+  "prompts": {},
+  "sessions": {
+    "s_740421ffb2aed4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c7b8a9b4-3305-4e7f-a6db-8b34d6372563",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
