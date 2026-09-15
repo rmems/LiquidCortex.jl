@@ -50,7 +50,9 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 
 ## Sentry
 
-- Runtime capture uses `ENV["SENTRY_DSN"]` (see `.env.example`).
+- Runtime capture is opt-in via `ENV["LIQUIDCORTEX_SENTRY_DSN"]` or
+  `enable_telemetry!(dsn)` (see `.env.example`). Generic `SENTRY_DSN` is
+  ignored so a host application's Sentry client is not overwritten.
 - DSN **must** target project **`liquidcortex`** (`SENTRY_ORG=limen-neural`, `SENTRY_PROJECT=liquidcortex`).
 - Do **not** reuse the **rust** project DSN — events will misroute (issue IDs like `RUST-*` with `package=LiquidCortex.jl`).
 - Quick check: DSN path suffix for liquidcortex is `…/4511697978982400` (rust ends in `…/4511355448066048`).
