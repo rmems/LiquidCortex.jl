@@ -380,6 +380,8 @@ end
             u = CUDA.zeros(Float32, 8)
             tick0 = brain.tick_count
             hist0 = brain.hist_idx
+            spikes0 = brain.total_spikes
+            rate0 = brain.last_spike_rate
             CUDA.unsafe_free!(brain.W_out)
             threw = false
             try
@@ -390,6 +392,8 @@ end
             @test threw
             @test brain.tick_count == tick0
             @test brain.hist_idx == hist0
+            @test brain.total_spikes == spikes0
+            @test brain.last_spike_rate == rate0
             brain = nothing; reclaim_gpu!()
         end
 

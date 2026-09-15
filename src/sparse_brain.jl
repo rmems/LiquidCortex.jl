@@ -131,8 +131,8 @@ Requires a CUDA GPU. Construct with `SparseBrain(tau_m; n_in, n_out, name)`.
 - `hist_full::Bool`: `true` once the history buffer has wrapped
 - `v_thresh_dynamic::Float32`: adaptive spike threshold (mV)
 - `tick_count::Int64`: completed timesteps
-- `total_spikes::Int64`: cumulative spike count (updated when `sync=true`)
-- `last_spike_rate::Float32`: last-tick spike fraction (updated when `sync=true`)
+- `total_spikes::Int64`: cumulative spike count (committed with the tick when `sync=true`)
+- `last_spike_rate::Float32`: last-tick spike fraction (committed with the tick when `sync=true`)
 
 # Examples
 ```julia
@@ -485,10 +485,12 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
 
     # Host reductions force a stream wait. Skip when sync=false so ensemble
     # mid-lobe loops do not reintroduce implicit barriers (bench / chain mode).
+    # Apply the host fields only after the later barrier / clock commit so a
+    # failed readout does not inflate `total_spikes` on a tick that did not
+    # complete.
+    n_spikes = 0.0f0
     if sync
         n_spikes = sum(brain.S)
-        brain.total_spikes += round(Int64, n_spikes)
-        brain.last_spike_rate = n_spikes / N
     end
 
     # ── 4. Traces + learning ─────────────────────────────────────────────────
@@ -509,10 +511,16 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     # ── 5. Readout ───────────────────────────────────────────────────────────
     mul!(brain.output, brain.W_out, brain.S)
 
-    # Device barrier (when requested) before committing clocks or history so
-    # a failed tick does not count and does not overwrite a history row.
+    # Device barrier (when requested) before committing clocks, history, or
+    # spike diagnostics so a failed tick does not count.
     sync && CUDA.synchronize()
-    commit_clock && _commit_lobe_clock!(brain, upcoming_tick, record_history)
+    if commit_clock
+        if sync
+            brain.total_spikes += round(Int64, n_spikes)
+            brain.last_spike_rate = n_spikes / N
+        end
+        _commit_lobe_clock!(brain, upcoming_tick, record_history)
+    end
     return nothing
 end
 
@@ -923,13 +931,15 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
         _commit_ensemble_aggregate!(eb)
 
         # Diagnostics deferred to end of ensemble (lobes used sync=false).
+        # Host spike fields commit only after the barrier so a failed
+        # synchronize() does not inflate counts on a tick that did not land.
         if sync
-            for lobe in eb.lobes
-                n_spikes = sum(lobe.S)
-                lobe.total_spikes += round(Int64, n_spikes)
-                lobe.last_spike_rate = n_spikes / N
-            end
+            n_spikes = [sum(lobe.S) for lobe in eb.lobes]
             CUDA.synchronize()
+            for (i, lobe) in enumerate(eb.lobes)
+                lobe.total_spikes += round(Int64, n_spikes[i])
+                lobe.last_spike_rate = n_spikes[i] / N
+            end
         end
 
         for lobe in eb.lobes
