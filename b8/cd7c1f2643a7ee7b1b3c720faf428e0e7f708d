@@ -1,0 +1,23 @@
+.github/ci-manifest/README.md
+  s_1eaa0874eabc59::t_34da1343f5f29b 5-7
+.github/workflows/ci.yml
+  s_1eaa0874eabc59::t_cb7b5d65d023d6 46-62
+CHANGELOG.md
+  s_1eaa0874eabc59::t_0747bc250dd942 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b8cd7c1f2643a7ee7b1b3c720faf428e0e7f708d",
+  "prompts": {},
+  "sessions": {
+    "s_1eaa0874eabc59": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "3afbc9bb-63a4-4ea2-bfbf-b9e0b836f336",
+        "model": "grok-4.6"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
