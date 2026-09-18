@@ -179,6 +179,9 @@ end
         @test poisoned isa LiquidCortex.EnsembleDesynchronizedError
         @test occursin("unusable", poisoned.msg)
         @test LiquidCortex._should_capture_runtime_exception(poisoned) == true
+        @test LiquidCortex._ensemble_diag_desync(false, Int64[1, 1, 1, 1]) == false
+        @test LiquidCortex._ensemble_diag_desync(true, Int64[1, 1, 1, 1]) == true
+        @test LiquidCortex._ensemble_diag_desync(false, Int64[1, 1, 2, 1]) == true
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
@@ -354,7 +357,9 @@ end
                 @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
                 @test Array(ensemble.agg_output) == saved_agg
                 @test ensemble.lobes[3].tick_count == ensemble.lobes[1].tick_count + 1
-                @test startswith(ensemble_diagnostics(ensemble), "[DESYNC]")
+                diag_mismatch = ensemble_diagnostics(ensemble)
+                @test startswith(diag_mismatch, "[DESYNC]")
+                @test occursin("W=n/a", diag_mismatch)
 
                 ensemble.lobes[3].tick_count -= 1
                 ensemble.weights = saved_weights[1:2]
@@ -368,7 +373,9 @@ end
                     ensemble_step!(ensemble, u_act; plasticity=:none)
                 )
                 @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
-                @test startswith(ensemble_diagnostics(ensemble), "[DESYNC]")
+                diag_poison = ensemble_diagnostics(ensemble)
+                @test startswith(diag_poison, "[DESYNC]")
+                @test occursin("W=n/a", diag_poison)
             finally
                 ensemble = nothing
                 reclaim_gpu_hard!()

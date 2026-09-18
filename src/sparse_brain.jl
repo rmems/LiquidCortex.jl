@@ -413,10 +413,17 @@ function _validate_step_kwargs!(brain::SparseBrain, u::AbstractVector;
     return nothing
 end
 
-"""Write history (optional) and advance `hist_idx` / `tick_count` after GPU work has succeeded."""
-function _commit_lobe_clock!(brain::SparseBrain, upcoming_tick::Int64, record_history::Bool)
+"""Queue a history row. Host `hist_idx` / `tick_count` stay unchanged until `_advance_lobe_clock!`."""
+function _queue_history_row!(brain::SparseBrain, record_history::Bool)
     if record_history
         brain.history[brain.hist_idx, :] .= brain.S
+    end
+    return nothing
+end
+
+"""Advance `hist_idx` / `tick_count` after GPU work (including any queued history write) has succeeded."""
+function _advance_lobe_clock!(brain::SparseBrain, upcoming_tick::Int64, record_history::Bool)
+    if record_history
         brain.hist_idx += 1
         if brain.hist_idx > HIST_DEPTH
             brain.hist_idx = 1
@@ -511,15 +518,19 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     # ── 5. Readout ───────────────────────────────────────────────────────────
     mul!(brain.output, brain.W_out, brain.S)
 
-    # Device barrier (when requested) before committing clocks, history, or
-    # spike diagnostics so a failed tick does not count.
+    # Queue history before the optional barrier so a failed synchronize()
+    # leaves `hist_idx` unchanged (the next successful tick overwrites the
+    # same slot). Host clocks and spike diagnostics commit only afterward.
+    if commit_clock
+        _queue_history_row!(brain, record_history)
+    end
     sync && CUDA.synchronize()
     if commit_clock
         if sync
             brain.total_spikes += round(Int64, n_spikes)
             brain.last_spike_rate = n_spikes / N
         end
-        _commit_lobe_clock!(brain, upcoming_tick, record_history)
+        _advance_lobe_clock!(brain, upcoming_tick, record_history)
     end
     return nothing
 end
@@ -930,9 +941,11 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
         # a partial sum.
         _commit_ensemble_aggregate!(eb)
 
-        # Diagnostics deferred to end of ensemble (lobes used sync=false).
-        # Host spike fields commit only after the barrier so a failed
-        # synchronize() does not inflate counts on a tick that did not land.
+        # Queue history, then optional barrier, then host clocks / spike
+        # fields. A failed synchronize() leaves hist_idx unchanged.
+        for lobe in eb.lobes
+            _queue_history_row!(lobe, record_history)
+        end
         if sync
             n_spikes = [sum(lobe.S) for lobe in eb.lobes]
             CUDA.synchronize()
@@ -943,7 +956,7 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
         end
 
         for lobe in eb.lobes
-            _commit_lobe_clock!(lobe, lobe.tick_count + 1, record_history)
+            _advance_lobe_clock!(lobe, lobe.tick_count + 1, record_history)
         end
     catch
         _poison_ensemble!(eb, prev_agg)
@@ -1059,7 +1072,8 @@ One-line-per-lobe diagnostic summary, joined with ` | `.
 # Returns
 - `String`: for each lobe, name, `τ_m`, tick, spike rate, and `W_out` norm.
   Prefixed with `[DESYNC] ` when lobe clocks disagree or the ensemble was
-  poisoned by a failed step. Example shape:
+  poisoned by a failed step; that path is host-only (`W=n/a`) so a sticky
+  device error cannot hide the prefix. Example shape:
   `[Fast:τ=10] tick=1 rate=1.23% W=0.4567 | [Medium:τ=25] …`
 
 # Examples
@@ -1071,18 +1085,31 @@ println(ensemble_diagnostics(ensemble))
 # [Fast:τ=10] tick=1 rate=…% W=… | [Medium:τ=25] tick=1 rate=…% W=… | …
 ```
 """
+function _ensemble_diag_desync(desynchronized::Bool, ticks::AbstractVector{<:Integer})
+    return desynchronized || _ensemble_tick_mismatch(ticks) !== nothing
+end
+
 function ensemble_diagnostics(eb::EnsembleBrain)
     ticks = Vector{Int64}(undef, length(eb.lobes))
+    @inbounds for i in eachindex(eb.lobes)
+        ticks[i] = eb.lobes[i].tick_count
+    end
+    # Poison / clock mismatch is host-only. Skip `norm(W_out)` so a sticky
+    # CUDA fault that poisoned the ensemble cannot hide the `[DESYNC]` line.
+    desync = _ensemble_diag_desync(eb.desynchronized, ticks)
     lines = String[]
     for (i, lobe) in enumerate(eb.lobes)
-        ticks[i] = lobe.tick_count
         rate_pct = round(lobe.last_spike_rate * 100, digits=2)
-        w_norm = round(Float64(norm(lobe.W_out)), digits=4)
-        push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
-            eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
+        if desync
+            push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=n/a",
+                eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct))
+        else
+            w_norm = round(Float64(norm(lobe.W_out)), digits=4)
+            push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
+                eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
+        end
     end
-    prefix = (eb.desynchronized || _ensemble_tick_mismatch(ticks) !== nothing) ?
-        "[DESYNC] " : ""
+    prefix = desync ? "[DESYNC] " : ""
     return prefix * join(lines, " | ")
 end
 
