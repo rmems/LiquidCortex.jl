@@ -2,9 +2,9 @@
 
 Root `Manifest.toml` stays gitignored so library consumers resolve freely.
 CI copies this file into the project before `Pkg.instantiate()` so the
-self-hosted GPU runner, ubuntu-latest smoke job, and (until #69 lands) the
-Codecov workflow resolve the same 1.13 closure instead of floating against
-General.
+self-hosted GPU runner and the ubuntu-latest smoke+coverage job in `ci.yml`
+resolve the same 1.13 closure instead of floating against General. `#69`
+folded the leftover `codecov.yml` workflow into that smoke job.
 
 ## Regenerate
 

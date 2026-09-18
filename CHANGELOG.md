@@ -37,7 +37,7 @@ change under `0.2.0`.
 ### Fixed
 
 - Fake doctest rerun and coverage-artifact gitignore: `#66`.
-- Folding the duplicate Codecov workflow into `ci.yml`: `#69` (separate PR).
+- Folding the duplicate Codecov workflow into `ci.yml`: `#69` (landed).
 
 ## [0.2.0] - untagged
 
