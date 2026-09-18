@@ -18,3 +18,8 @@ cp Manifest.toml .github/ci-manifest/Manifest.toml
 `Pkg.instantiate()` with this Manifest must keep `julia_version = "1.13.0"`
 (or whatever CI currently runs). A 1.10/1.11 Manifest will not satisfy the
 1.13 jobs.
+
+Dependabot and CompatHelper PRs run `Pkg.update()` in CI after copying this
+file, so the new `[compat]` is actually resolved for that job. After merging
+those PRs, regenerate and commit this Manifest or later jobs stay on the
+previous lock.
