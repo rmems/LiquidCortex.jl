@@ -34,8 +34,8 @@ const _ref_initialized = Ref{Bool}(false)
 Allocate the 2,048-neuron reference LSM reservoir on GPU.
 
 Call this **manually** when you need to pin `n_in` / `n_out` before the first
-step, or to pre-allocate so the first [`run_lsm_step`](@ref) is not the
-allocation. Otherwise the first `run_lsm_step` / [`run_lsm_step_str`](@ref)
+step, or to pre-allocate so the first `run_lsm_step` is not the
+allocation. Otherwise the first `run_lsm_step` / `run_lsm_step_str`
 initializes lazily from `length(inputs_vec)` and the `n_out` keyword.
 
 Re-calling after the reservoir is already initialized overwrites the global
@@ -91,7 +91,7 @@ Later calls require `length(inputs_vec) == _ref_n_in[]` or they throw
 
 # Keyword Arguments
 - `n_out::Int=16`: readout size used **only** on first-call lazy init.
-  Ignored once the reservoir exists — call [`_init_ref_lsm!`](@ref) first
+  Ignored once the reservoir exists — call `LiquidCortex._init_ref_lsm!` first
   to set both dims explicitly.
 
 # Returns
