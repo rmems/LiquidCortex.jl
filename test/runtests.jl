@@ -467,6 +467,11 @@ end
                 end
                 @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
                 @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
+                reset!(ensemble)
+                @test all(l.tick_count == 0 for l in ensemble.lobes)
+                @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
+                @test iszero(CUDA.maximum(abs, ensemble.agg_output))
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
 
                 saved_agg = copy(Array(ensemble.agg_output))
                 saved_weights = copy(ensemble.weights)
@@ -505,6 +510,8 @@ end
                 @test startswith(diag_poison, "[DESYNC]")
                 @test occursin("W=n/a", diag_poison)
             finally
+                free!(ensemble)
+                free!(ensemble)  # idempotent
                 ensemble = nothing
                 reclaim_gpu_hard!()
             end
@@ -524,16 +531,13 @@ end
             catch
                 threw = true
             end
-            @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
-            @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
-            reset!(ensemble)
-            @test all(l.tick_count == 0 for l in ensemble.lobes)
-            @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
-            @test iszero(CUDA.maximum(abs, ensemble.agg_output))
-            @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
-            free!(ensemble)
-            free!(ensemble)  # idempotent
-            reclaim_gpu_hard!()
+            @test threw
+            @test brain.tick_count == tick0
+            @test brain.hist_idx == hist0
+            @test brain.total_spikes == spikes0
+            @test brain.last_spike_rate == rate0
+            free!(brain)
+            reclaim_gpu!()
         end
 
         @testset "GPU: default step! advances tick and keeps finite output" begin
