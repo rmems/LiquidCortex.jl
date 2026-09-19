@@ -64,7 +64,7 @@ output = get_output(brain)
 | `ensemble_step!(eb, u; inhibition, reflex_eta, reflex_signal, ...)` | Step all lobes and aggregate |
 | `get_output(brain)` | Copy readout from GPU to CPU |
 | `get_ensemble_output(eb)` | Copy aggregated readout |
-| `reset!(brain)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
+| `reset!(brain; keep_weights=true)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
 | `free!(brain)` / `free!(eb)` | Release GPU buffers into the CUDA.jl pool |
 | `compute_reservoir_covariance!(brain)` | Compute subsampled covariance matrix |
 | `diagnostics(brain)` | Return diagnostic string |

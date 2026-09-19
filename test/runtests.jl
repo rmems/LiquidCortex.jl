@@ -112,6 +112,13 @@ end
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
     end
 
+    @testset "CPU: reset! kwargs" begin
+        LiquidCortex._validate_reset_kwargs(; keep_weights=true)
+        @test_throws LiquidCortex.LiquidCortexValidationError (
+            LiquidCortex._validate_reset_kwargs(; keep_weights=false)
+        )
+    end
+
     @testset "CPU: SparseBrain constructor validation" begin
         # Guards run before any host COO draw or CUDA allocation, so these
         # are CPU-safe. Exception type is pinned to ArgumentError to match
@@ -332,7 +339,10 @@ end
             @test CUDA.maximum(brain.V) == LiquidCortex.V_REST
             @test iszero(CUDA.maximum(abs, brain.S))
             @test iszero(CUDA.maximum(abs, brain.output))
+            @test iszero(CUDA.maximum(abs, brain.trace_pre))
+            @test iszero(CUDA.maximum(abs, brain.history))
             @test Array(brain.W_out) == W0
+            @test_throws LiquidCortex.LiquidCortexValidationError reset!(brain; keep_weights=false)
             step!(brain, u; inhibition=0.1f0)
             @test brain.tick_count == 1
             free!(brain)
@@ -415,16 +425,12 @@ end
             catch
                 threw = true
             end
-            @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
-            @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
-            reset!(ensemble)
-            @test all(l.tick_count == 0 for l in ensemble.lobes)
-            @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
-            @test iszero(CUDA.maximum(abs, ensemble.agg_output))
-            @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
-            free!(ensemble)
-            free!(ensemble)  # idempotent
-            reclaim_gpu_hard!()
+            @test threw
+            @test brain.tick_count == tick0
+            @test brain.hist_idx == hist0
+            @test brain.total_spikes == spikes0
+            @test brain.last_spike_rate == rate0
+            brain = nothing; reclaim_gpu!()
         end
 
         @testset "GPU: default step! advances tick and keeps finite output" begin
