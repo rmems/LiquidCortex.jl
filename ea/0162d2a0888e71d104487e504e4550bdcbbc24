@@ -1,0 +1,27 @@
+src/sparse_brain.jl
+  s_740421ffb2aed4::t_c0f67d915bb591 992-995
+  s_740421ffb2aed4::t_c016bb683959ca 1040-1042
+  s_740421ffb2aed4::t_e2d7afa7ebee8c 939-942
+  s_740421ffb2aed4::t_ee26b67589de0a 427-436,445-446,495-498,521-525
+  s_740421ffb2aed4::t_cc82dd6939f14b 764-766,768,795-803
+  s_740421ffb2aed4::t_a9d503baa8ed04 805-816
+test/runtests.jl
+  s_740421ffb2aed4::t_cca8e70f2dea22 418-427
+  s_740421ffb2aed4::t_9e4b98f2a62f65 168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ea0162d2a0888e71d104487e504e4550bdcbbc24",
+  "prompts": {},
+  "sessions": {
+    "s_740421ffb2aed4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "c7b8a9b4-3305-4e7f-a6db-8b34d6372563",
+        "model": "cursor-grok-4.6-high"
+      },
+      "human_author": "Raul Cardenas Montoya <montoyaraul34@gmail.com>"
+    }
+  }
+}
