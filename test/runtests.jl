@@ -18,14 +18,12 @@ function reclaim_gpu!()
     return nothing
 end
 
-# Best-effort drain of the CUDA memory pool. `device_reset!` is a no-op on
-# CUDA.jl 6, so this cannot unreserve a 65k ensemble that is still reachable.
+# CUDA.jl 6 made `device_reset!` a documented no-op (depwarn only). GPU cases
+# call `free!` so the ~0.5–2 GB per reservoir returns to the pool instead of
+# waiting on CuArray finalizers. This helper then syncs and reclaims; it cannot
+# unreserve VRAM that is still held by a live 65k ensemble.
 function reclaim_gpu_hard!()
     reclaim_gpu!()
-    try
-        CUDA.device_reset!()
-    catch
-    end
     return nothing
 end
 
@@ -571,15 +569,41 @@ end
                 diag_poison = ensemble_diagnostics(ensemble)
                 @test startswith(diag_poison, "[DESYNC]")
                 @test occursin("W=n/a", diag_poison)
+
+                # Same 4-lobe construction: a second EnsembleBrain late in the
+                # suite OOMs on 16GB after pool growth (#70).
+                reset!(ensemble)
+                @test all(l.tick_count == 0 for l in ensemble.lobes)
+                @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
+                @test iszero(CUDA.maximum(abs, ensemble.agg_output))
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
             finally
-                ensemble = nothing
+                free!(ensemble)
+                free!(ensemble)  # idempotent
                 reclaim_gpu_hard!()
             end
         end
 
         @testset "GPU: failed step! does not commit tick or history" begin
-            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-clock-last")
-            @test brain.tick_count == 0
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-clock-last",
+                cfg=gpu_test_cfg())
+            u = CUDA.zeros(Float32, 8)
+            tick0 = brain.tick_count
+            hist0 = brain.hist_idx
+            spikes0 = brain.total_spikes
+            rate0 = brain.last_spike_rate
+            CUDA.unsafe_free!(brain.W_out)
+            threw = false
+            try
+                step!(brain, u)
+            catch
+                threw = true
+            end
+            @test threw
+            @test brain.tick_count == tick0
+            @test brain.hist_idx == hist0
+            @test brain.total_spikes == spikes0
+            @test brain.last_spike_rate == rate0
             free!(brain); reclaim_gpu!()
         end
 

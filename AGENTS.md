@@ -10,6 +10,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - Install: `julia --project -e 'using Pkg; Pkg.instantiate()'`
 - Run tests: `julia --project -e 'using Pkg; Pkg.test()'`
 - Test with coverage: `julia --project -e 'using Pkg; Pkg.test(; coverage=true)'`
+- Build docs: `julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()' && julia --project=docs docs/make.jl`
 
 ## Architecture
 
@@ -17,6 +18,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - `src/sparse_brain.jl` — SparseBrain / EnsembleBrain / BrainConfig, `step!()`, STDP
 - `src/reference_lsm.jl` — 2,048-neuron reference reservoir (lazy-init, configurable dims)
 - `test/runtests.jl` — Test suite (CPU + GPU tests gated by `_cuda_available`)
+- `docs/make.jl` — Documenter.jl site (CPU-buildable; examples are not doctested)
 
 ## Code Style
 
