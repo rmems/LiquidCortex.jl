@@ -72,11 +72,15 @@ small-scale path until reservoir size is configurable.
 | `get_ensemble_output(eb)` | Copy aggregated readout |
 | `spikes(brain)` / `membrane(brain)` / `traces(brain)` | Host copies of spike state, `V`, eligibility traces |
 | `compute_reservoir_covariance(brain)` | Subsampled covariance (throws until history is full; `!` is a read-only alias) |
+| `compute_reservoir_covariance!(brain)` | Compute subsampled covariance matrix |
 | `diagnostics(brain)` | Return diagnostic string |
 | `ensemble_diagnostics(eb)` | Per-lobe diagnostic summary |
 | `run_lsm_step(u, inhibit)` | Step the 2,048-neuron dense reference LSM (host `Vector{Float32}`) |
 | `LiquidCortexValidationError` | Thrown on API misuse (`step!` kwargs / input size) |
 | `ETA` / `MAX_INHIBITION` | Default `reflex_eta` (`0.001`) and inhibition clamp (`3`) |
+| `reset!(brain)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
+| `free!(brain)` / `free!(eb)` | Release GPU buffers into the CUDA.jl pool |
+| `EnsembleDesynchronizedError` | Raised when lobe clocks disagree or a prior ensemble step failed |
 | `enable_telemetry!(dsn)` | Opt in to Sentry capture (HTTPS DSN; does not read `SENTRY_DSN`) |
 
 ## Experimental step API

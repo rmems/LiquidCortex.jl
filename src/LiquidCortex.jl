@@ -175,15 +175,17 @@ end
 # ── GPU source files (structs defined at load; GPU allocations deferred to
 #    constructors/runtime, guarded by _cuda_available[]) ─────────────────────
 include("sparse_brain.jl")
+include("brain_lifecycle.jl")
 include("reference_lsm.jl")
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-export SparseBrain, EnsembleBrain
+export SparseBrain, EnsembleBrain, EnsembleDesynchronizedError
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance, compute_reservoir_covariance!
 export spikes, membrane, traces
 export diagnostics, ensemble_diagnostics
+export reset!, free!
 export enable_telemetry!
 export LiquidCortexValidationError, ETA, MAX_INHIBITION
 export run_lsm_step, run_lsm_step_str, REF_N, REF_IN_DEFAULT, REF_OUT_DEFAULT
@@ -202,9 +204,13 @@ export run_lsm_step, run_lsm_step_str, REF_N, REF_IN_DEFAULT, REF_OUT_DEFAULT
         precompile(step!, (SparseBrain, CuVector{Float32}))
         precompile(step!, (SparseBrain, Vector{Float32}))
         precompile(get_output, (SparseBrain,))
+        precompile(reset!, (SparseBrain,))
+        precompile(free!, (SparseBrain,))
         precompile(EnsembleBrain, ())
         precompile(ensemble_step!, (EnsembleBrain, CuVector{Float32}))
         precompile(get_ensemble_output, (EnsembleBrain,))
+        precompile(reset!, (EnsembleBrain,))
+        precompile(free!, (EnsembleBrain,))
     end
 end
 
