@@ -131,8 +131,8 @@ Requires a CUDA GPU. Construct with `SparseBrain(tau_m; n_in, n_out, name)`.
 - `hist_full::Bool`: `true` once the history buffer has wrapped
 - `v_thresh_dynamic::Float32`: adaptive spike threshold (mV)
 - `tick_count::Int64`: completed timesteps
-- `total_spikes::Int64`: cumulative spike count (updated when `sync=true`)
-- `last_spike_rate::Float32`: last-tick spike fraction (updated when `sync=true`)
+- `total_spikes::Int64`: cumulative spike count (committed with the tick when `sync=true`)
+- `last_spike_rate::Float32`: last-tick spike fraction (committed with the tick when `sync=true`)
 
 # Examples
 ```julia
@@ -195,6 +195,18 @@ mutable struct SparseBrain
     last_spike_rate::Float32
 end
 
+function _validate_lobe_dims(n_in::Int, n_out::Int)
+    n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
+    n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
+    return nothing
+end
+
+function _validate_tau_m(tau_m::Float32)
+    (isfinite(tau_m) && tau_m > 0) || throw(ArgumentError(
+        "tau_m must be positive and finite, got $tau_m"))
+    return nothing
+end
+
 """
     SparseBrain(tau_m; n_in=14, n_out=16, name="default") -> SparseBrain
 
@@ -208,7 +220,10 @@ Weight initialization:
     (Breaks zero-readout deadlock — reservoir produces signals from tick 1)
 
 # Arguments
-- `tau_m::Float32`: membrane time constant in milliseconds
+- `tau_m::Float32`: membrane time constant in milliseconds (must be
+  positive and finite). All of `0`, negatives, `NaN`, and `Inf` are
+  rejected. `V` starts at `V_REST`, so the first membrane term is
+  `0 / tau_m`; only `0` and `NaN` make that term `NaN`.
 
 # Keyword Arguments
 - `n_in::Int=14`: input dimension (must be positive)
@@ -228,8 +243,8 @@ step!(brain, u; inhibition=0.5f0)
 ```
 """
 function SparseBrain(tau_m::Float32; n_in::Int=14, n_out::Int=16, name::String="default")
-    n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
-    n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
+    _validate_lobe_dims(n_in, n_out)
+    _validate_tau_m(tau_m)
     @debug "[brain:$name] Initializing 65,536-neuron lobe (τ_m=$(tau_m)ms, in=$(n_in), out=$(n_out))..."
 
     xavier_std_in = sqrt(2.0f0 / Float32(n_in))
@@ -398,6 +413,27 @@ function _validate_step_kwargs!(brain::SparseBrain, u::AbstractVector;
     return nothing
 end
 
+"""Queue a history row. Host `hist_idx` / `tick_count` stay unchanged until `_advance_lobe_clock!`."""
+function _queue_history_row!(brain::SparseBrain, record_history::Bool)
+    if record_history
+        brain.history[brain.hist_idx, :] .= brain.S
+    end
+    return nothing
+end
+
+"""Advance `hist_idx` / `tick_count` after GPU work (including any queued history write) has succeeded."""
+function _advance_lobe_clock!(brain::SparseBrain, upcoming_tick::Int64, record_history::Bool)
+    if record_history
+        brain.hist_idx += 1
+        if brain.hist_idx > HIST_DEPTH
+            brain.hist_idx = 1
+            brain.hist_full = true
+        end
+    end
+    brain.tick_count = upcoming_tick
+    return nothing
+end
+
 # Internal implementation; public entry point is `step!` (with Sentry capture).
 function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     inhibition::Real=0.0f0,
@@ -406,7 +442,8 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     recurrent_eta::Real=1.0f-4,
     sync::Bool=true,
     record_history::Bool=true,
-    use_device_noise::Bool=false)
+    use_device_noise::Bool=false,
+    commit_clock::Bool=true)
     _validate_step_kwargs!(brain, u; plasticity=plasticity, recurrent_eta=recurrent_eta)
     upcoming_tick = brain.tick_count + 1
     inhibition = Float32(inhibition)
@@ -455,10 +492,12 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
 
     # Host reductions force a stream wait. Skip when sync=false so ensemble
     # mid-lobe loops do not reintroduce implicit barriers (bench / chain mode).
+    # Apply the host fields only after the later barrier / clock commit so a
+    # failed readout does not inflate `total_spikes` on a tick that did not
+    # complete.
+    n_spikes = 0.0f0
     if sync
         n_spikes = sum(brain.S)
-        brain.total_spikes += round(Int64, n_spikes)
-        brain.last_spike_rate = n_spikes / N
     end
 
     # ── 4. Traces + learning ─────────────────────────────────────────────────
@@ -479,18 +518,20 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     # ── 5. Readout ───────────────────────────────────────────────────────────
     mul!(brain.output, brain.W_out, brain.S)
 
-    # Commit clocks last so a failed tick does not count as completed.
-    if record_history
-        brain.history[brain.hist_idx, :] .= brain.S
-        brain.hist_idx += 1
-        if brain.hist_idx > HIST_DEPTH
-            brain.hist_idx = 1
-            brain.hist_full = true
-        end
+    # Queue history before the optional barrier so a failed synchronize()
+    # leaves `hist_idx` unchanged (the next successful tick overwrites the
+    # same slot). Host clocks and spike diagnostics commit only afterward.
+    if commit_clock
+        _queue_history_row!(brain, record_history)
     end
-    brain.tick_count = upcoming_tick
-
     sync && CUDA.synchronize()
+    if commit_clock
+        if sync
+            brain.total_spikes += round(Int64, n_spikes)
+            brain.last_spike_rate = n_spikes / N
+        end
+        _advance_lobe_clock!(brain, upcoming_tick, record_history)
+    end
     return nothing
 end
 
@@ -697,6 +738,8 @@ Weights are `LOBE_WEIGHTS = Float32[0.4, 0.3, 0.2, 0.1]` (copied into `weights`)
 - `lobe_names::Vector{String}`: `["Fast", "Medium", "Slow", "Integrator"]`
 - `agg_output::CuVector{Float32}`: weighted-sum readout (`n_out`)
 - `weights::Vector{Float32}`: per-lobe aggregation weights (sum to 1.0)
+- `desynchronized::Bool`: `true` after a failed [`ensemble_step!`](@ref);
+  further steps and reads raise [`EnsembleDesynchronizedError`](@ref)
 
 # Examples
 ```julia
@@ -712,13 +755,17 @@ mutable struct EnsembleBrain
     lobe_names::Vector{String}
     agg_output::CuVector{Float32}   # Aggregated readout
     weights::Vector{Float32}        # Per-lobe aggregation weights
+    desynchronized::Bool            # Failed step: do not mix mixed-time readouts
 end
 
 """
     EnsembleDesynchronizedError <: Exception
 
-Lobe `tick_count`s disagree, so aggregated output would mix simulated times.
+Lobe `tick_count`s disagree, or a prior [`ensemble_step!`](@ref) failed after
+partially mutating the ensemble, so aggregated output would mix simulated times.
+
 Raised by [`ensemble_step!`](@ref) and [`get_ensemble_output`](@ref).
+GPU neuron state is not rolled back; the ensemble is unusable until discarded.
 """
 struct EnsembleDesynchronizedError <: Exception
     msg::String
@@ -745,15 +792,30 @@ function _assert_ticks_synchronized(ticks::AbstractVector{<:Integer})
         "ensemble lobes desynchronized: lobe 1 tick=$(t0), lobe $i tick=$(ti)"))
 end
 
+function _assert_ensemble_clocks(ticks::AbstractVector{<:Integer}; desynchronized::Bool=false)
+    if desynchronized
+        throw(EnsembleDesynchronizedError(
+            "ensemble is unusable after a failed step; lobe state may mix simulated times"))
+    end
+    _assert_ticks_synchronized(ticks)
+    return nothing
+end
+
 function _assert_ensemble_synchronized!(eb::EnsembleBrain)
-    isempty(eb.lobes) && return nothing
-    t0 = eb.lobes[1].tick_count
-    for i in 2:length(eb.lobes)
-        ti = eb.lobes[i].tick_count
-        if ti != t0
-            throw(EnsembleDesynchronizedError(
-                "ensemble lobes desynchronized: lobe 1 tick=$(t0), lobe $i tick=$(ti)"))
-        end
+    ticks = Vector{Int64}(undef, length(eb.lobes))
+    @inbounds for i in eachindex(eb.lobes)
+        ticks[i] = eb.lobes[i].tick_count
+    end
+    _assert_ensemble_clocks(ticks; desynchronized=eb.desynchronized)
+    return nothing
+end
+
+function _poison_ensemble!(eb::EnsembleBrain, prev_agg)
+    eb.desynchronized = true
+    try
+        copyto!(eb.agg_output, prev_agg)
+    catch
+        # Best-effort: keep the poison flag even if restore fails.
     end
     return nothing
 end
@@ -799,6 +861,7 @@ y = get_ensemble_output(ensemble)             # Vector{Float32} of length 4
 ```
 """
 function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
+    _validate_lobe_dims(n_in, n_out)
     @debug "[ensemble] Initializing $(N_LOBES) lobes × $(N) = $(N_LOBES * N) neurons"
 
     lobes = SparseBrain[]
@@ -817,7 +880,7 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
     @debug @sprintf("[ensemble] ✓ All %d lobes online — %d total neurons", N_LOBES, N_LOBES * N)
     @debug @sprintf("[ensemble] VRAM: %.2f / %.2f GB (%.0f%% used)", used, total_mem, used / total_mem * 100)
 
-    EnsembleBrain(lobes, copy(LOBE_NAMES), agg_output, copy(LOBE_WEIGHTS))
+    EnsembleBrain(lobes, copy(LOBE_NAMES), agg_output, copy(LOBE_WEIGHTS), false)
 end
 
 # Internal implementation; public entry point is `ensemble_step!` (with Sentry capture).
@@ -846,40 +909,58 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
         plasticity=plasticity, recurrent_eta=recurrent_eta)
     _assert_ensemble_synchronized!(eb)
 
-    # Prewarm STDP edge lists before the async lobe loop so the first
-    # :recurrent_stdp ensemble step does not host-sync mid-loop per lobe.
-    if plasticity === :recurrent_stdp && Float32(recurrent_eta) != 0.0f0
-        for lobe in eb.lobes
-            _ensure_edge_indices!(lobe)
+    prev_agg = copy(eb.agg_output)
+    try
+        # Prewarm STDP edge lists before the async lobe loop so the first
+        # :recurrent_stdp ensemble step does not host-sync mid-loop per lobe.
+        if plasticity === :recurrent_stdp && Float32(recurrent_eta) != 0.0f0
+            for lobe in eb.lobes
+                _ensure_edge_indices!(lobe)
+            end
         end
-    end
 
-    # Step all lobes; suppress mid-lobe sync (single sync after aggregate)
-    for (i, lobe) in enumerate(eb.lobes)
-        eta_lobe = (i == 1) ? reflex_fast : reflex_eta  # Lobe 1 = Fast
-        _step_impl!(lobe, u;
-            inhibition=inhibition,
-            reflex_eta=eta_lobe,
-            plasticity=plasticity,
-            recurrent_eta=recurrent_eta,
-            sync=false,
-            record_history=record_history,
-            use_device_noise=use_device_noise)
-    end
-
-    # Aggregate readouts: weighted sum across lobes. Restore the previous
-    # complete vector if this loop throws, so get_ensemble_output is never
-    # a partial sum.
-    _commit_ensemble_aggregate!(eb)
-
-    # Diagnostics deferred to end of ensemble (lobes used sync=false).
-    if sync
-        for lobe in eb.lobes
-            n_spikes = sum(lobe.S)
-            lobe.total_spikes += round(Int64, n_spikes)
-            lobe.last_spike_rate = n_spikes / N
+        # Step all lobes without committing clocks, history, or mid-lobe sync.
+        # Clocks and history advance together after aggregate + optional device
+        # barrier so a later CUDA.synchronize() failure cannot look like a
+        # completed tick or leave a ghost history row.
+        for (i, lobe) in enumerate(eb.lobes)
+            eta_lobe = (i == 1) ? reflex_fast : reflex_eta  # Lobe 1 = Fast
+            _step_impl!(lobe, u;
+                inhibition=inhibition,
+                reflex_eta=eta_lobe,
+                plasticity=plasticity,
+                recurrent_eta=recurrent_eta,
+                sync=false,
+                record_history=record_history,
+                use_device_noise=use_device_noise,
+                commit_clock=false)
         end
-        CUDA.synchronize()
+
+        # Aggregate readouts: weighted sum across lobes. Restore the previous
+        # complete vector if this loop throws, so get_ensemble_output is never
+        # a partial sum.
+        _commit_ensemble_aggregate!(eb)
+
+        # Queue history, then optional barrier, then host clocks / spike
+        # fields. A failed synchronize() leaves hist_idx unchanged.
+        for lobe in eb.lobes
+            _queue_history_row!(lobe, record_history)
+        end
+        if sync
+            n_spikes = [sum(lobe.S) for lobe in eb.lobes]
+            CUDA.synchronize()
+            for (i, lobe) in enumerate(eb.lobes)
+                lobe.total_spikes += round(Int64, n_spikes[i])
+                lobe.last_spike_rate = n_spikes[i] / N
+            end
+        end
+
+        for lobe in eb.lobes
+            _advance_lobe_clock!(lobe, lobe.tick_count + 1, record_history)
+        end
+    catch
+        _poison_ensemble!(eb, prev_agg)
+        rethrow()
     end
     return nothing
 end
@@ -908,8 +989,10 @@ Mid-lobe `CUDA.synchronize()` is suppressed; one sync runs after aggregation
 when `sync=true`. Spike-rate host reductions also run only when `sync=true`.
 
 Runtime exceptions are captured to Sentry (when configured) before rethrow.
-If lobe `tick_count`s disagree, raises [`EnsembleDesynchronizedError`](@ref)
-before any lobe is stepped.
+If lobe `tick_count`s disagree, or a prior ensemble step failed partway,
+raises [`EnsembleDesynchronizedError`](@ref) before any lobe is stepped.
+A throw after that check poisons the ensemble (`desynchronized=true`) so
+a later read cannot mix simulated times or return a stale aggregate.
 
 # Returns
 - `Nothing`: read the aggregated readout with [`get_ensemble_output`](@ref)
@@ -954,8 +1037,9 @@ end
 
 Copy the weighted-sum ensemble readout from GPU to CPU.
 
-Raises [`EnsembleDesynchronizedError`](@ref) if lobe clocks disagree, so a
-caller cannot silently read a mix of simulated times.
+Raises [`EnsembleDesynchronizedError`](@ref) if lobe clocks disagree or a
+prior ensemble step failed, so a caller cannot silently read a mix of
+simulated times.
 
 # Arguments
 - `eb::EnsembleBrain`: ensemble whose `agg_output` is copied
@@ -987,7 +1071,9 @@ One-line-per-lobe diagnostic summary, joined with ` | `.
 
 # Returns
 - `String`: for each lobe, name, `τ_m`, tick, spike rate, and `W_out` norm.
-  Example shape:
+  Prefixed with `[DESYNC] ` when lobe clocks disagree or the ensemble was
+  poisoned by a failed step; that path is host-only (`W=n/a`) so a sticky
+  device error cannot hide the prefix. Example shape:
   `[Fast:τ=10] tick=1 rate=1.23% W=0.4567 | [Medium:τ=25] …`
 
 # Examples
@@ -999,15 +1085,32 @@ println(ensemble_diagnostics(ensemble))
 # [Fast:τ=10] tick=1 rate=…% W=… | [Medium:τ=25] tick=1 rate=…% W=… | …
 ```
 """
+function _ensemble_diag_desync(desynchronized::Bool, ticks::AbstractVector{<:Integer})
+    return desynchronized || _ensemble_tick_mismatch(ticks) !== nothing
+end
+
 function ensemble_diagnostics(eb::EnsembleBrain)
+    ticks = Vector{Int64}(undef, length(eb.lobes))
+    @inbounds for i in eachindex(eb.lobes)
+        ticks[i] = eb.lobes[i].tick_count
+    end
+    # Poison / clock mismatch is host-only. Skip `norm(W_out)` so a sticky
+    # CUDA fault that poisoned the ensemble cannot hide the `[DESYNC]` line.
+    desync = _ensemble_diag_desync(eb.desynchronized, ticks)
     lines = String[]
     for (i, lobe) in enumerate(eb.lobes)
         rate_pct = round(lobe.last_spike_rate * 100, digits=2)
-        w_norm = round(Float64(norm(lobe.W_out)), digits=4)
-        push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
-            eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
+        if desync
+            push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=n/a",
+                eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct))
+        else
+            w_norm = round(Float64(norm(lobe.W_out)), digits=4)
+            push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
+                eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
+        end
     end
-    return join(lines, " | ")
+    prefix = desync ? "[DESYNC] " : ""
+    return prefix * join(lines, " | ")
 end
 
 # ── step! for EnsembleBrain ──
