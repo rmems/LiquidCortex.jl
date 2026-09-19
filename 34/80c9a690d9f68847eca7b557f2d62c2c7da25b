@@ -1,0 +1,15 @@
+src/LiquidCortex.jl
+  a95079608d138c37 167
+src/sparse_brain.jl
+  a95079608d138c37 734-738,954-956,972-1048,1146
+  3495b66258d893f4 1363-1364,1366-1372,1375-1382
+test/runtests.jl
+  a95079608d138c37 84,410
+  8371c543af90ce5b 397
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3480c9a690d9f68847eca7b557f2d62c2c7da25b",
+  "prompts": {}
+}
