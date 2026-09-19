@@ -1,0 +1,3 @@
+# Default JuliaFormatter style (https://github.com/domluna/JuliaFormatter.jl)
+indent = 4
+margin = 92

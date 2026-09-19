@@ -36,9 +36,6 @@ jobs:
     timeout-minutes: 60
 
     env:
-      # Optional: report step! failures to liquidcortex during CI (package-specific
-      # env so a generic SENTRY_DSN cannot hijack a consumer's Sentry hub).
-      LIQUIDCORTEX_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       JULIA_NUM_THREADS: "1"
       JULIA_PKG_PRECOMPILE_AUTO: "1"
 
@@ -57,6 +54,19 @@ jobs:
           julia -e 'VERSION.major == 1 && VERSION.minor == 13 || error("expected Julia 1.13, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
+      - name: Pin CI Manifest
+        run: cp .github/ci-manifest/Manifest.toml Manifest.toml
+
+      # CompatHelper / Dependabot edit Project.toml but not this lockfile.
+      # Re-resolve so those PRs actually exercise the new [compat] bounds.
+      - name: Refresh lockfile on dependency-bot PRs
+        if: >
+          github.event_name == 'pull_request' &&
+          (github.actor == 'dependabot[bot]' ||
+           startsWith(github.head_ref, 'compathelper/') ||
+           startsWith(github.head_ref, 'dependabot/'))
+        run: julia --project=. -e 'using Pkg; Pkg.update()'
+
       - name: Instantiate
         run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
@@ -70,6 +80,12 @@ jobs:
           '
 
       - name: Run tests (CPU + GPU)
+        env:
+          # Optional: report step! failures to liquidcortex during tests only
+          # (package-specific env so a generic SENTRY_DSN cannot hijack a
+          # consumer's Sentry hub). Scoped to this step so instantiate/precompile
+          # do not see the DSN.
+          LIQUIDCORTEX_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         id: tests
         run: julia --project=. -e 'using Pkg; Pkg.test(; coverage=true)'
 

@@ -1,4 +1,8 @@
-Manifest.toml
+# Root lockfile stays uncommitted so consumers are not pinned.
+# CI uses .github/ci-manifest/Manifest.toml (leading slash = repo root only).
+/Manifest.toml
+/docs/build/
+/docs/Manifest.toml
 *.jld2
 *.mem
 *.log
