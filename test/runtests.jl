@@ -73,7 +73,7 @@ end
     @testset "Public API is exported" begin
         # Verify each name is both defined AND exported (not just defined)
         exports = names(LiquidCortex; all=false)
-        for sym in [:SparseBrain, :EnsembleBrain,
+        for sym in [:SparseBrain, :EnsembleBrain, :EnsembleDesynchronizedError,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
                     :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
                     :reset!, :free!, :enable_telemetry!]
@@ -112,6 +112,29 @@ end
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
     end
 
+    @testset "CPU: SparseBrain constructor validation" begin
+        # Guards run before any host COO draw or CUDA allocation, so these
+        # are CPU-safe. Exception type is pinned to ArgumentError to match
+        # n_in/n_out and the reference LSM (not LiquidCortexValidationError).
+        @test_throws ArgumentError SparseBrain(0.0f0)
+        @test_throws ArgumentError SparseBrain(-1.0f0)
+        @test_throws ArgumentError SparseBrain(NaN32)
+        @test_throws ArgumentError SparseBrain(Inf32)
+        @test_throws ArgumentError SparseBrain(20.0f0; n_in=0)
+        @test_throws ArgumentError SparseBrain(20.0f0; n_out=-3)
+        @test_throws ArgumentError EnsembleBrain(; n_in=0)
+        @test_throws ArgumentError EnsembleBrain(; n_out=0)
+
+        err = try
+            SparseBrain(0.0f0)
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("tau_m", err.msg)
+        @test LiquidCortex._should_capture_runtime_exception(err) == true
+    end
+
     @testset "CPU: Sentry opt-in" begin
         @test !LiquidCortex._sentry_dsn_usable("")
         @test !LiquidCortex._sentry_dsn_usable("http://abc@host/1")
@@ -127,6 +150,42 @@ end
         @test tags["gpu_failure"] == "false"
         @test tags["error_class"] == "runtime"
         @test !haskey(Sentry.global_tags, "error_class")
+    end
+
+    @testset "CPU: ensemble clock desync detection" begin
+        # Production change that would fail this: dropping the mismatch helper
+        # or treating a distinct lobe tick as synchronized.
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[]) === nothing
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 4, 4]) === nothing
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 5, 4]) == (Int64(4), 3, Int64(5))
+        LiquidCortex._assert_ticks_synchronized(Int64[0, 0, 0, 0])
+        LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized=false)
+        @test_throws LiquidCortex.EnsembleDesynchronizedError (
+            LiquidCortex._assert_ticks_synchronized(Int64[1, 1, 0, 1])
+        )
+        @test_throws LiquidCortex.EnsembleDesynchronizedError (
+            LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized=true)
+        )
+        err = try
+            LiquidCortex._assert_ticks_synchronized(Int64[1, 2])
+        catch e
+            e
+        end
+        @test err isa LiquidCortex.EnsembleDesynchronizedError
+        @test occursin("desynchronized", err.msg)
+        @test occursin("lobe 2", err.msg)
+        @test LiquidCortex._should_capture_runtime_exception(err) == true
+        poisoned = try
+            LiquidCortex._assert_ensemble_clocks(Int64[4, 4, 4, 4]; desynchronized=true)
+        catch e
+            e
+        end
+        @test poisoned isa LiquidCortex.EnsembleDesynchronizedError
+        @test occursin("unusable", poisoned.msg)
+        @test LiquidCortex._should_capture_runtime_exception(poisoned) == true
+        @test LiquidCortex._ensemble_diag_desync(false, Int64[1, 1, 1, 1]) == false
+        @test LiquidCortex._ensemble_diag_desync(true, Int64[1, 1, 1, 1]) == true
+        @test LiquidCortex._ensemble_diag_desync(false, Int64[1, 1, 2, 1]) == true
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
@@ -286,15 +345,75 @@ end
             # (a second EnsembleBrain late in the suite OOMs on 16GB after pool growth).
             reclaim_gpu_hard!()
             ensemble = EnsembleBrain(n_in=8, n_out=4)
+            try
+                u = CUDA.zeros(Float32, 8)
+                ensemble_step!(ensemble, u; inhibition=0.3f0, reflex_signal=0.2f0)
+                output = get_ensemble_output(ensemble)
+                @test length(output) == 4
+                W0 = [copy(Array(l.W_out)) for l in ensemble.lobes]
+                u_act = cu(randn(Float32, 8) .* 0.2f0)
+                n_steps = 5
+                for _ in 1:n_steps
+                    ensemble_step!(ensemble, u_act; plasticity=:none, inhibition=0.1f0)
+                end
+                @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
+
+                saved_agg = copy(Array(ensemble.agg_output))
+                saved_weights = copy(ensemble.weights)
+                @test ensemble.desynchronized == false
+                ensemble.weights = saved_weights[1:2]
+                @test_throws BoundsError LiquidCortex._commit_ensemble_aggregate!(ensemble)
+                @test Array(ensemble.agg_output) == saved_agg
+                @test ensemble.desynchronized == false
+                ensemble.weights = saved_weights
+
+                ensemble.lobes[3].tick_count += 1
+                @test_throws LiquidCortex.EnsembleDesynchronizedError (
+                    ensemble_step!(ensemble, u_act; plasticity=:none)
+                )
+                @test ensemble.desynchronized == false
+                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
+                @test Array(ensemble.agg_output) == saved_agg
+                @test ensemble.lobes[3].tick_count == ensemble.lobes[1].tick_count + 1
+                diag_mismatch = ensemble_diagnostics(ensemble)
+                @test startswith(diag_mismatch, "[DESYNC]")
+                @test occursin("W=n/a", diag_mismatch)
+
+                ensemble.lobes[3].tick_count -= 1
+                ensemble.weights = saved_weights[1:2]
+                ticks_before_poison = [l.tick_count for l in ensemble.lobes]
+                @test_throws BoundsError ensemble_step!(ensemble, u_act; plasticity=:none)
+                @test ensemble.desynchronized
+                @test all(l.tick_count == ticks_before_poison[i] for (i, l) in enumerate(ensemble.lobes))
+                @test Array(ensemble.agg_output) == saved_agg
+                ensemble.weights = saved_weights
+                @test_throws LiquidCortex.EnsembleDesynchronizedError (
+                    ensemble_step!(ensemble, u_act; plasticity=:none)
+                )
+                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
+                diag_poison = ensemble_diagnostics(ensemble)
+                @test startswith(diag_poison, "[DESYNC]")
+                @test occursin("W=n/a", diag_poison)
+            finally
+                ensemble = nothing
+                reclaim_gpu_hard!()
+            end
+        end
+
+        @testset "GPU: failed step! does not commit tick or history" begin
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-clock-last")
             u = CUDA.zeros(Float32, 8)
-            ensemble_step!(ensemble, u; inhibition=0.3f0, reflex_signal=0.2f0)
-            output = get_ensemble_output(ensemble)
-            @test length(output) == 4
-            W0 = [copy(Array(l.W_out)) for l in ensemble.lobes]
-            u_act = cu(randn(Float32, 8) .* 0.2f0)
-            n_steps = 5
-            for _ in 1:n_steps
-                ensemble_step!(ensemble, u_act; plasticity=:none, inhibition=0.1f0)
+            tick0 = brain.tick_count
+            hist0 = brain.hist_idx
+            spikes0 = brain.total_spikes
+            rate0 = brain.last_spike_rate
+            CUDA.unsafe_free!(brain.W_out)
+            threw = false
+            try
+                step!(brain, u)
+            catch
+                threw = true
             end
             @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
             @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
