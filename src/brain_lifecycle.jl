@@ -109,6 +109,7 @@ function free!(brain::SparseBrain)
     CUDA.unsafe_free!(brain.trace_post)
     CUDA.unsafe_free!(brain.output)
     CUDA.unsafe_free!(brain.history)
+    CUDA.unsafe_free!(brain.u_buf)
     return nothing
 end
 
