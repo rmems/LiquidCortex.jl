@@ -20,6 +20,9 @@ for t in 1:100
 end
 println("After 100 steps: ", diagnostics(brain))
 println("Output: ", get_output(brain))
+reset!(brain)
+println("After reset!: ", diagnostics(brain))
+free!(brain)
 
 # Create the full ensemble
 ensemble = EnsembleBrain(n_in=8, n_out=4)
@@ -31,5 +34,6 @@ for t in 1:50
 end
 println("After 50 ensemble steps: ", ensemble_diagnostics(ensemble))
 println("Ensemble output: ", get_ensemble_output(ensemble))
+free!(ensemble)
 
 println("Done.")

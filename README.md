@@ -69,9 +69,12 @@ output = get_output(brain)
 | `ensemble_step!(eb, u; inhibition, reflex_eta, reflex_signal, ...)` | Step all lobes and aggregate |
 | `get_output(brain)` | Copy readout from GPU to CPU |
 | `get_ensemble_output(eb)` | Copy aggregated readout |
+| `reset!(brain)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
+| `free!(brain)` / `free!(eb)` | Release GPU buffers into the CUDA.jl pool |
 | `compute_reservoir_covariance!(brain)` | Compute subsampled covariance matrix |
 | `diagnostics(brain)` | Return diagnostic string |
 | `ensemble_diagnostics(eb)` | Per-lobe diagnostic summary |
+| `EnsembleDesynchronizedError` | Raised when lobe clocks disagree or a prior ensemble step failed |
 | `enable_telemetry!(dsn)` | Opt in to Sentry capture (HTTPS DSN; does not read `SENTRY_DSN`) |
 
 ## Experimental step API

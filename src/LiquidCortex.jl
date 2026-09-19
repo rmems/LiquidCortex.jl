@@ -159,13 +159,15 @@ end
 # ── GPU source files (structs defined at load; GPU allocations deferred to
 #    constructors/runtime, guarded by _cuda_available[]) ─────────────────────
 include("sparse_brain.jl")
+include("brain_lifecycle.jl")
 include("reference_lsm.jl")
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-export SparseBrain, EnsembleBrain, BrainConfig
+export SparseBrain, EnsembleBrain, BrainConfig, EnsembleDesynchronizedError
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance!, diagnostics, ensemble_diagnostics
+export reset!, free!
 export enable_telemetry!
 
 # Warm method inference at install time. Do **not** construct SparseBrain or
@@ -180,9 +182,13 @@ export enable_telemetry!
         precompile(SparseBrain, (Float32,))
         precompile(step!, (SparseBrain, CuVector{Float32}))
         precompile(get_output, (SparseBrain,))
+        precompile(reset!, (SparseBrain,))
+        precompile(free!, (SparseBrain,))
         precompile(EnsembleBrain, ())
         precompile(ensemble_step!, (EnsembleBrain, CuVector{Float32}))
         precompile(get_ensemble_output, (EnsembleBrain,))
+        precompile(reset!, (EnsembleBrain,))
+        precompile(free!, (EnsembleBrain,))
     end
 end
 
