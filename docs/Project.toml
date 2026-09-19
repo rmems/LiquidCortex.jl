@@ -1,0 +1,9 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+LiquidCortex = "1f75a0df-502a-4be0-9310-97a9e2e7f166"
+
+[sources]
+LiquidCortex = {path = ".."}
+
+[compat]
+Documenter = "1"

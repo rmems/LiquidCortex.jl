@@ -1164,6 +1164,12 @@ function get_ensemble_output(eb::EnsembleBrain)
     return Array(eb.agg_output)
 end
 
+# Host-only desync predicate. Lives above `ensemble_diagnostics` so the
+# public docstring attaches to the exported function, not this helper.
+function _ensemble_diag_desync(desynchronized::Bool, ticks::AbstractVector{<:Integer})
+    return desynchronized || _ensemble_tick_mismatch(ticks) !== nothing
+end
+
 """
     ensemble_diagnostics(eb::EnsembleBrain) -> String
 
@@ -1188,10 +1194,6 @@ println(ensemble_diagnostics(ensemble))
 # [Fast:τ=10] tick=1 rate=…% W=… | [Medium:τ=25] tick=1 rate=…% W=… | …
 ```
 """
-function _ensemble_diag_desync(desynchronized::Bool, ticks::AbstractVector{<:Integer})
-    return desynchronized || _ensemble_tick_mismatch(ticks) !== nothing
-end
-
 function ensemble_diagnostics(eb::EnsembleBrain)
     ticks = Vector{Int64}(undef, length(eb.lobes))
     @inbounds for i in eachindex(eb.lobes)
