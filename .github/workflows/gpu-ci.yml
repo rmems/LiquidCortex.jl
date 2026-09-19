@@ -17,9 +17,10 @@ on:
 
 # Serialize per-ref so an unrelated PR does not cancel main/release GPU jobs.
 # The single self-hosted runner still runs at most one job at a time.
+# Do not cancel main/release pushes — only cancel superseded PR runs.
 concurrency:
   group: liquidcortex-gpu-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') }}
 
 permissions:
   contents: read
