@@ -16,14 +16,12 @@ function reclaim_gpu!()
     return nothing
 end
 
-# Full device reset — required between EnsembleBrain cases on 16GB cards.
-# Soft reclaim leaves the memory pool reserved (~2GB leak per ensemble in CI).
+# CUDA.jl 6 made `device_reset!` a documented no-op (depwarn only). GPU
+# cases call `free!` so the ~0.5–2 GB per reservoir returns to the pool
+# instead of waiting on CuArray finalizers. This helper then syncs and
+# reclaims; the old hard reset is gone.
 function reclaim_gpu_hard!()
     reclaim_gpu!()
-    try
-        CUDA.device_reset!()
-    catch
-    end
     return nothing
 end
 
@@ -509,6 +507,14 @@ end
                 diag_poison = ensemble_diagnostics(ensemble)
                 @test startswith(diag_poison, "[DESYNC]")
                 @test occursin("W=n/a", diag_poison)
+
+                # Same 4-lobe construction: a second EnsembleBrain late in the
+                # suite OOMs on 16GB after pool growth (#70).
+                reset!(ensemble)
+                @test all(l.tick_count == 0 for l in ensemble.lobes)
+                @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
+                @test iszero(CUDA.maximum(abs, ensemble.agg_output))
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
             finally
                 free!(ensemble)
                 free!(ensemble)  # idempotent
@@ -536,8 +542,7 @@ end
             @test brain.hist_idx == hist0
             @test brain.total_spikes == spikes0
             @test brain.last_spike_rate == rate0
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: default step! advances tick and keeps finite output" begin

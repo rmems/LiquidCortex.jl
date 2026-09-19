@@ -4,9 +4,10 @@
 
 GPU-accelerated sparse liquid state machine for neuromorphic computing
 
-![Julia](https://img.shields.io/badge/language-Julia-9558B2)
-![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
-![Coverage](https://codecov.io/gh/rmems/LiquidCortex.jl/branch/main/graph/badge.svg)
+[![Julia](https://img.shields.io/badge/language-Julia-9558B2)](https://julialang.org)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE)
+[![Coverage](https://codecov.io/gh/rmems/LiquidCortex.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/rmems/LiquidCortex.jl)
+[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://rmems.github.io/LiquidCortex.jl/dev/)
 
 ---
 
@@ -98,7 +99,7 @@ LiquidCortex is an experimental Julia package. Defaults are intentional:
 | `use_device_noise` | default `false` | Host Gaussian noise upload; device RNG with host fallback if unavailable |
 
 Recurrent reservoir weights are **not** trained under the default path.
-Requires **CUDA.jl 6.x**. Local verification and CI workflows use **Julia 1.12**.
+Requires **CUDA.jl 6.x**. Local verification and CI workflows use **Julia 1.13**.
 
 ## OU-SDE Membrane Dynamics
 
