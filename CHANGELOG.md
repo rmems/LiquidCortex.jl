@@ -38,6 +38,9 @@ change under `0.2.0`.
 
 - Fake doctest rerun and coverage-artifact gitignore: `#66`.
 - Folding the duplicate Codecov workflow into `ci.yml`: `#69` (landed).
+- Restore the GPU "failed step! does not commit tick" clock assertions that
+  `#70` overwrote with ensemble `reset!`/`free!` checks (`UndefVarError: ensemble`).
+  Those lifecycle checks now run on the existing 4-lobe construction.
 
 ## [0.2.0] - untagged
 
