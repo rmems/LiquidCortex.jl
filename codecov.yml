@@ -1,17 +1,17 @@
 # Coverage flags:
-# - `julia` — CPU-reachable slice (ubuntu-latest)
-# - `julia-gpu` — reservoir dynamics from the self-hosted GPU runner
+# - `julia` — CPU-reachable slice (ubuntu-latest), including host-side kernels
+#   extracted from `_step_impl!` / STDP / ensemble (see issue #55)
+# - `julia-gpu` — reservoir dynamics from the self-hosted GPU runner (#68)
 #
-# See issue #55. Project and patch statuses stay informational until CPU-side
-# core tests exist (#57) and GPU coverage has a stable baseline.
-#
-# Revisit when #55 is fully closed: drop `informational` and set real targets.
+# Reports merge: project `auto` and patch status are both enforced.
 
 coverage:
   status:
     project:
       default:
-        informational: true
+        target: auto
+        threshold: 5%
     patch:
       default:
-        informational: true
+        target: auto
+        threshold: 5%

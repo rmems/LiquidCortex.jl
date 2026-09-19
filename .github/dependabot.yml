@@ -1,9 +1,14 @@
 # Dependabot configuration for LiquidCortex.jl
 # https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+#
+# Reviewers come from .github/CODEOWNERS (the `reviewers:` key is deprecated).
+# The `julia` ecosystem updates Project.toml [compat] and, when present, a
+# Manifest — CompatHelper.jl is in maintenance mode and recommends this path.
+# CompatHelper.yml remains as a daily [compat] scan until Dependabot-only
+# is enough.
 
 version: 2
 updates:
-  # GitHub Actions — weekly SHA-pinned updates
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -17,5 +22,16 @@ updates:
       github-actions:
         patterns:
           - "*"
-    reviewers:
-      - "rmems"
+
+  - package-ecosystem: "julia"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "compat"
+    groups:
+      julia:
+        patterns:
+          - "*"

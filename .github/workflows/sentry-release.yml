@@ -37,21 +37,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Load .env (local override)
-        if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
-        run: |
-          if [ -f .env ]; then
-            # Append to GITHUB_ENV so later steps see overrides (each run: step is a new shell)
-            while IFS='=' read -r key value; do
-              [[ -z "$key" || "$key" =~ ^# ]] && continue
-              # Strip surrounding quotes if present
-              value="${value%\"}"; value="${value#\"}"
-              value="${value%\'}"; value="${value#\'}"
-              echo "$key=$value" >> "$GITHUB_ENV"
-            done < .env
-            echo "Loaded overrides from .env into GITHUB_ENV"
-          fi
-
       - name: Install pinned sentry-cli
         if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
         env:

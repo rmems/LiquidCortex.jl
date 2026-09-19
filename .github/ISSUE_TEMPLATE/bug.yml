@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a defect in LiquidCortex.jl
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        CPU-only vs GPU matters. Say which environment you used.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Expected vs actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal Julia snippet. Redact DSNs and tokens.
+      render: julia
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "Julia 1.13, CUDA.jl 6.x, GPU model or CPU-only"
+    validations:
+      required: true
