@@ -17,9 +17,10 @@ on:
 
 # Serialize per-ref so an unrelated PR does not cancel main/release GPU jobs.
 # The single self-hosted runner still runs at most one job at a time.
+# Do not cancel main/release pushes — only cancel superseded PR runs.
 concurrency:
   group: liquidcortex-gpu-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') }}
 
 permissions:
   contents: read
@@ -85,7 +86,8 @@ jobs:
           # consumer's Sentry hub). Scoped to this step so instantiate/precompile
           # do not see the DSN.
           LIQUIDCORTEX_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-        run: julia --project=. -e 'using Pkg; Pkg.test()'
+        id: tests
+        run: julia --project=. -e 'using Pkg; Pkg.test(; coverage=true)'
 
       - name: Reclaim GPU memory
         if: always()
@@ -101,3 +103,27 @@ jobs:
               println("VRAM free/total GB: ", round(free; digits=2), " / ", round(total; digits=2))
             end
           '
+
+      # GPU coverage is the slice ubuntu-latest cannot see (see issue #55).
+      # Gate on the test step, not job success(), so a reclaim failure still uploads.
+      - name: Process coverage
+        if: always() && steps.tests.outcome == 'success'
+        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
+        with:
+          directories: src
+
+      - name: Upload coverage to Codecov
+        if: always() && steps.tests.outcome == 'success'
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: lcov.info
+          flags: julia-gpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Remove coverage artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          find src test -name '*.cov' -delete
+          rm -f lcov.info
