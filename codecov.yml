@@ -3,10 +3,7 @@
 #   extracted from `_step_impl!` / STDP / ensemble (see issue #55)
 # - `julia-gpu` — reservoir dynamics from the self-hosted GPU runner (#68)
 #
-# Project `auto` is meaningful now: host-kernel lines are covered on
-# ubuntu-latest, so a drop is a real CPU-side regression.
-# Patch stays informational until #68 uploads the `julia-gpu` flag;
-# CUDA-only `_step_impl!` / constructor lines still report 0% from this runner.
+# Reports merge: project `auto` and patch status are both enforced.
 
 coverage:
   status:
@@ -16,4 +13,5 @@ coverage:
         threshold: 5%
     patch:
       default:
-        informational: true
+        target: auto
+        threshold: 5%
