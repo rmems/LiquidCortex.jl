@@ -16,6 +16,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 
 - `src/LiquidCortex.jl` — Module definition, exports, `__init__`
 - `src/sparse_brain.jl` — SparseBrain (65k neurons/lobe), EnsembleBrain (4 lobes), `step!()`, STDP
+- `src/brain_lifecycle.jl` — `reset!(; keep_weights=true)`, `free!`
 - `src/reference_lsm.jl` — 2,048-neuron reference reservoir (lazy-init, configurable dims)
 - `test/runtests.jl` — Test suite (CPU + GPU tests gated by `_cuda_available`)
 - `docs/make.jl` — Documenter.jl site (CPU-buildable; examples are not doctested)

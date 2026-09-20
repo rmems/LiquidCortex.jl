@@ -119,6 +119,13 @@ end
         @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
     end
 
+    @testset "CPU: reset! kwargs" begin
+        LiquidCortex._validate_reset_kwargs(; keep_weights=true)
+        @test_throws LiquidCortex.LiquidCortexValidationError (
+            LiquidCortex._validate_reset_kwargs(; keep_weights=false)
+        )
+    end
+
     @testset "CPU: SparseBrain constructor validation" begin
         # Guards run before any host COO draw or CUDA allocation, so these
         # are CPU-safe. Exception type is pinned to ArgumentError to match
@@ -465,7 +472,10 @@ end
             @test CUDA.maximum(brain.V) == LiquidCortex.V_REST
             @test iszero(CUDA.maximum(abs, brain.S))
             @test iszero(CUDA.maximum(abs, brain.output))
+            @test iszero(CUDA.maximum(abs, brain.trace_pre))
+            @test iszero(CUDA.maximum(abs, brain.history))
             @test Array(brain.W_out) == W0
+            @test_throws LiquidCortex.LiquidCortexValidationError reset!(brain; keep_weights=false)
             step!(brain, u; inhibition=0.1f0)
             @test brain.tick_count == 1
             free!(brain)

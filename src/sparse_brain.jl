@@ -254,6 +254,8 @@ A 65,536-neuron sparse CUDA reservoir lobe with OU-SDE membrane dynamics,
 STDP-capable recurrent weights, and a dense readout.
 
 Requires a CUDA GPU. Construct with `SparseBrain(tau_m; n_in, n_out, name)`.
+Reuse a lobe across trials with [`reset!`](@ref); release device memory with
+[`free!`](@ref). CuArray finalizers run if the caller never calls `free!`.
 
 # Fields
 - `W::CuSparseMatrixCSC{Float16,Int32}`: sparse recurrent weights (1% connectivity)
@@ -378,6 +380,10 @@ Weight initialization:
 - `n_in::Int=14`: input dimension (must be positive)
 - `n_out::Int=16`: readout dimension (must be positive)
 - `name::String="default"`: label used in constructor progress logs
+
+Prefer [`free!`](@ref) when peak VRAM matters; CuArray finalizers are the
+GC fallback and must not be used as a substitute for `free!` after
+`step!(; sync=false)`.
 
 # Returns
 - `SparseBrain`: GPU-resident lobe ready for [`step!`](@ref)
@@ -850,6 +856,9 @@ Weights are `LOBE_WEIGHTS = Float32[0.4, 0.3, 0.2, 0.1]` (copied into `weights`)
 - `weights::Vector{Float32}`: per-lobe aggregation weights (sum to 1.0)
 - `desynchronized::Bool`: `true` after a failed [`ensemble_step!`](@ref);
   further steps and reads raise [`EnsembleDesynchronizedError`](@ref)
+
+Reuse an ensemble across trials with [`reset!`](@ref); release device memory
+with [`free!`](@ref). Do not rely on GC after `ensemble_step!(; sync=false)`.
 
 # Examples
 ```julia
