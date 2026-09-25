@@ -75,6 +75,156 @@ function cpu_randn_cu(dims::Vararg{Int,N}) where {N}
     return cu(randn(Float32, dims...))
 end
 
+# ── Host-side kernels (plain arrays; unit-tested on CPU) ─────────────────────
+# GPU-locked only by SparseBrain field types. Hosted CI asserts the same
+# arithmetic the CUDA path uses (#55). `_pair_stdp_kernel!` calls `_pair_stdp_dw`.
+
+"""Dynamic spike threshold after clamping `inhibition` to `[0, MAX_INHIBITION]`."""
+function _inhibited_threshold(inhibition::Real)
+    inhib = clamp(Float32(inhibition), 0.0f0, MAX_INHIBITION)
+    return V_THRESH + inhib * INHIBITION_GAIN
+end
+
+"""Fast-lobe readout rate: 5× when `|reflex_signal| > 0.1`."""
+function _reflex_fast_eta(reflex_eta::Float32, reflex_signal::Float32)
+    return abs(reflex_signal) > 0.1f0 ? reflex_eta * 5.0f0 : reflex_eta
+end
+
+@inline function _lobe_reflex_eta(lobe_index::Int, reflex_eta::Float32, reflex_fast::Float32)
+    return lobe_index == 1 ? reflex_fast : reflex_eta
+end
+
+@inline function _trace_decay_factor(dt::Float32, tau_trace::Float32)
+    return 1.0f0 - dt / tau_trace
+end
+
+@inline function _spike_rate(n_spikes, n::Integer)
+    return Float32(n_spikes) / Float32(n)
+end
+
+"""Advance circular history index. Returns `(next_idx, wrapped)`."""
+function _advance_history_index(hist_idx::Integer, hist_depth::Integer)
+    next = Int(hist_idx) + 1
+    if next > hist_depth
+        return 1, true
+    end
+    return next, false
+end
+
+"""Pair-STDP Δw on one edge. LTP when pre-trace co-occurs with a post spike."""
+@inline function _pair_stdp_dw(trace_pre_i::Float32, s_j::Float32, s_i::Float32,
+                                trace_post_j::Float32, eta::Float32)
+    return eta * (trace_pre_i * s_j - s_i * trace_post_j)
+end
+
+"""Apply pair STDP to existing sparse edges (host arrays or GPU vectors)."""
+function _pair_stdp_apply!(nzVal, pre_idx, post_idx, trace_pre, trace_post, S,
+                           eta::Float32, w_max::Float32)
+    @inbounds for i in eachindex(nzVal)
+        pre = Int(pre_idx[i])
+        post = Int(post_idx[i])
+        dw = _pair_stdp_dw(Float32(trace_pre[pre]), Float32(S[post]),
+                            Float32(S[pre]), Float32(trace_post[post]), eta)
+        if dw != 0.0f0
+            nzVal[i] = Float16(clamp(Float32(nzVal[i]) + dw, -w_max, w_max))
+        end
+    end
+    return nzVal
+end
+
+"""Hebbian readout update: `ΔW_out = η · 1(y>0) · trace_preᵀ`, then clamp."""
+function _readout_hebbian_update!(W_out, output, trace_pre, reflex_eta::Float32, w_max::Float32)
+    S_out = output .> 0.0f0
+    W_out .+= reflex_eta .* (Float32.(S_out) * trace_pre')
+    clamp!(W_out, -w_max, w_max)
+    return nothing
+end
+
+function _validate_csc(colPtr::AbstractVector{<:Integer}, edge_nnz::Int)
+    isempty(colPtr) &&
+        throw(ArgumentError("Malformed CSC: empty colPtr"))
+    colPtr[1] == 1 ||
+        throw(ArgumentError("Malformed CSC: colPtr[1]=$(colPtr[1]), expected 1"))
+    colPtr[end] == edge_nnz + 1 ||
+        throw(ArgumentError("Malformed CSC: colPtr[end]=$(colPtr[end]) vs nnz+1=$(edge_nnz + 1)"))
+    n_cols = length(colPtr) - 1
+    @inbounds for col in 1:n_cols
+        colPtr[col + 1] >= colPtr[col] ||
+            throw(ArgumentError(
+                "Malformed CSC: non-monotonic colPtr at col=$col ($(colPtr[col]) > $(colPtr[col + 1]))"))
+    end
+    return nothing
+end
+
+function _csc_edge_lists(colPtr::AbstractVector{<:Integer}, rowVal::AbstractVector{<:Integer})
+    edge_nnz = length(rowVal)
+    _validate_csc(colPtr, edge_nnz)
+    n_cols = length(colPtr) - 1
+    pre = Vector{Int32}(undef, edge_nnz)
+    post = Vector{Int32}(undef, edge_nnz)
+    k = 1
+    @inbounds for col in 1:n_cols
+        p_lo = Int(colPtr[col])
+        p_hi = Int(colPtr[col + 1]) - 1
+        p_hi > edge_nnz && throw(ArgumentError(
+            "Malformed CSC: colPtr[$(col + 1)]=$(colPtr[col + 1]) exceeds nnz=$edge_nnz"))
+        for p in p_lo:p_hi
+            post[k] = Int32(rowVal[p])
+            pre[k] = Int32(col)
+            k += 1
+        end
+    end
+    return pre, post
+end
+
+function _weighted_sum!(agg, weights, outputs)
+    n = length(outputs)
+    length(weights) == n || throw(BoundsError(weights, n))
+    fill!(agg, zero(eltype(agg)))
+    for (w, y) in zip(weights, outputs)
+        agg .+= w .* y
+    end
+    return agg
+end
+
+function _cov_subsample_count(n::Int, cov_subsample::Int)
+    return min(cov_subsample, n)
+end
+
+function _cov_subsample_indices(n::Int, cov_subsample::Int,
+                               rng::AbstractRNG=Random.default_rng())
+    k = _cov_subsample_count(n, cov_subsample)
+    return sort(randperm(rng, n)[1:k])
+end
+
+function _spike_history_covariance(X, hist_depth::Integer)
+    μ = mean(X, dims=1)
+    X_centered = X .- μ
+    return (X_centered' * X_centered) ./ Float32(hist_depth - 1)
+end
+
+function _format_diagnostics(tick_count, total_spikes, last_spike_rate,
+                             v_thresh_dynamic, w_out_norm; name::String="")
+    label = isempty(name) ? "[brain]" : "[brain:$name]"
+    return string(
+        label, " tick=", tick_count,
+        " spikes=", total_spikes,
+        " rate=", round(last_spike_rate * 100, digits=2), "%",
+        " V_thresh=", round(v_thresh_dynamic, digits=1),
+        " W_out_norm=", round(Float64(w_out_norm), digits=4)
+    )
+end
+
+function _format_lobe_diagnostics(name, tau_m, tick_count, rate_pct)
+    return @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=n/a",
+        name, Int(tau_m), tick_count, rate_pct)
+end
+
+function _format_lobe_diagnostics(name, tau_m, tick_count, rate_pct, w_norm)
+    return @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
+        name, Int(tau_m), tick_count, rate_pct, w_norm)
+end
+
 # ── Pair STDP on existing sparse edges (experimental plasticity=:recurrent_stdp) ─
 function _pair_stdp_kernel!(nzVal, pre_idx, post_idx, trace_pre, trace_post, S,
                             eta::Float32, w_max::Float32, nnz::Int32)
@@ -83,7 +233,7 @@ function _pair_stdp_kernel!(nzVal, pre_idx, post_idx, trace_pre, trace_post, S,
         pre = pre_idx[i]
         post = post_idx[i]
         # Pair rule: LTP when pre-trace co-occurs with post spike; LTD reverse
-        dw = eta * (trace_pre[pre] * S[post] - S[pre] * trace_post[post])
+        dw = _pair_stdp_dw(trace_pre[pre], S[post], S[pre], trace_post[post], eta)
         # Skip clamp/write when dw==0 so eta=0 (or silent edges) never truncates
         # constructor weights that may exceed |W_MAX| before any learning.
         if dw != 0.0f0
@@ -107,7 +257,9 @@ STDP-capable recurrent weights, and a dense readout.
 Requires a CUDA GPU with ≥14 GB VRAM. Construct with
 `SparseBrain(tau_m; n_in, n_out, name)` — `tau_m` accepts any `Real` and is
 stored as `Float32`. Constructing on a CPU-only host fails immediately, before
-the ~43M-nnz COO draw.
+the ~43M-nnz COO draw. Reuse a lobe across trials with [`reset!`](@ref);
+release device memory (including the host-`step!` input buffer) with
+[`free!`](@ref). CuArray finalizers run if the caller never calls `free!`.
 
 # Fields
 - `W::CuSparseMatrixCSC{Float16,Int32}`: sparse recurrent weights (1% connectivity)
@@ -248,6 +400,10 @@ Weight initialization:
 - `n_out::Int=16`: readout dimension (must be positive)
 - `name::AbstractString="default"`: stored label used in `diagnostics` / `show`
 
+Prefer [`free!`](@ref) when peak VRAM matters; CuArray finalizers are the
+GC fallback and must not be used as a substitute for `free!` after
+`step!(; sync=false)`.
+
 # Returns
 - `SparseBrain`: GPU-resident lobe ready for [`step!`](@ref)
 
@@ -362,36 +518,12 @@ function _ensure_edge_indices!(brain::SparseBrain)
         brain.nnz > 0 && return nothing
     colPtr = Array(brain.W.colPtr)
     rowVal = Array(brain.W.rowVal)
-    n_cols = length(colPtr) - 1
-    edge_nnz = length(rowVal)
     # CSC invariants (1-based Julia SparseArrays). Failures here are internal
     # faults and remain Sentry-captured (not LiquidCortexValidationError).
-    colPtr[1] == 1 ||
-        throw(ArgumentError("Malformed CSC: colPtr[1]=$(colPtr[1]), expected 1"))
-    colPtr[end] == edge_nnz + 1 ||
-        throw(ArgumentError("Malformed CSC: colPtr[end]=$(colPtr[end]) vs nnz+1=$(edge_nnz + 1)"))
-    @inbounds for col in 1:n_cols
-        colPtr[col + 1] >= colPtr[col] ||
-            throw(ArgumentError(
-                "Malformed CSC: non-monotonic colPtr at col=$col ($(colPtr[col]) > $(colPtr[col + 1]))"))
-    end
-    pre = Vector{Int32}(undef, edge_nnz)
-    post = Vector{Int32}(undef, edge_nnz)
-    k = 1
-    @inbounds for col in 1:n_cols
-        p_lo = colPtr[col]
-        p_hi = colPtr[col + 1] - 1
-        p_hi > edge_nnz && throw(ArgumentError(
-            "Malformed CSC: colPtr[$(col + 1)]=$(colPtr[col + 1]) exceeds nnz=$edge_nnz"))
-        for p in p_lo:p_hi
-            post[k] = Int32(rowVal[p])
-            pre[k] = Int32(col)
-            k += 1
-        end
-    end
+    pre, post = _csc_edge_lists(colPtr, rowVal)
     brain.pre_idx = CuArray(pre)
     brain.post_idx = CuArray(post)
-    brain.nnz = edge_nnz
+    brain.nnz = length(rowVal)
     return nothing
 end
 
@@ -459,11 +591,8 @@ end
 """Advance `hist_idx` / `tick_count` after GPU work (including any queued history write) has succeeded."""
 function _advance_lobe_clock!(brain::SparseBrain, upcoming_tick::Int64, record_history::Bool)
     if record_history
-        brain.hist_idx += 1
-        if brain.hist_idx > HIST_DEPTH
-            brain.hist_idx = 1
-            brain.hist_full = true
-        end
+        brain.hist_idx, wrapped = _advance_history_index(brain.hist_idx, HIST_DEPTH)
+        wrapped && (brain.hist_full = true)
     end
     brain.tick_count = upcoming_tick
     return nothing
@@ -486,8 +615,7 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     recurrent_eta = Float32(recurrent_eta)
 
     # ── 1. Global Inhibition ─────────────────────────────────────────────────
-    inhib = clamp(inhibition, 0.0f0, MAX_INHIBITION)
-    brain.v_thresh_dynamic = V_THRESH + inhib * INHIBITION_GAIN
+    brain.v_thresh_dynamic = _inhibited_threshold(inhibition)
 
     # ── 2. OU-SDE Membrane Dynamics (per-lobe τ_m) ──────────────────────────
     # F16×F16 SpMV via * (generic mul! on F16 CSC can hit scalar indexing)
@@ -536,18 +664,16 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     end
 
     # ── 4. Traces + learning ─────────────────────────────────────────────────
-    brain.trace_pre .= brain.trace_pre .* (1.0f0 - DT / TAU_TRACE) .+ brain.S
-    brain.trace_post .= brain.trace_post .* (1.0f0 - DT / TAU_TRACE) .+ brain.S
+    decay = _trace_decay_factor(DT, TAU_TRACE)
+    brain.trace_pre .= brain.trace_pre .* decay .+ brain.S
+    brain.trace_post .= brain.trace_post .* decay .+ brain.S
 
     if plasticity === :recurrent_stdp
         _apply_pair_stdp!(brain; eta=recurrent_eta)
     end
 
     if plasticity !== :none && upcoming_tick % 10 == 0
-        S_out = brain.output .> 0.0f0
-        dW_out = reflex_eta .* (Float32.(S_out) * brain.trace_pre')
-        brain.W_out .+= dW_out
-        clamp!(brain.W_out, -W_MAX, W_MAX)
+        _readout_hebbian_update!(brain.W_out, brain.output, brain.trace_pre, reflex_eta, W_MAX)
     end
 
     # ── 5. Readout ───────────────────────────────────────────────────────────
@@ -563,7 +689,7 @@ function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     if commit_clock
         if sync
             brain.total_spikes += round(Int64, n_spikes)
-            brain.last_spike_rate = n_spikes / N
+            brain.last_spike_rate = _spike_rate(n_spikes, N)
         end
         _advance_lobe_clock!(brain, upcoming_tick, record_history)
     end
@@ -748,13 +874,9 @@ println(diagnostics(brain))
 ```
 """
 function diagnostics(brain::SparseBrain)
-    return string(
-        "[brain:", brain.name, "] tick=", brain.tick_count,
-        " spikes=", brain.total_spikes,
-        " rate=", round(brain.last_spike_rate * 100, digits=2), "%",
-        " V_thresh=", round(brain.v_thresh_dynamic, digits=1),
-        " W_out_norm=", round(Float64(norm(brain.W_out)), digits=4)
-    )
+    return _format_diagnostics(
+        brain.tick_count, brain.total_spikes, brain.last_spike_rate,
+        brain.v_thresh_dynamic, norm(brain.W_out); name=brain.name)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -801,17 +923,12 @@ function compute_reservoir_covariance(brain::SparseBrain)
         "($HIST_DEPTH ticks with record_history=true); " *
         "got tick_count=$(brain.tick_count), hist_full=false"))
 
-    # Subsample COV_SUBSAMPLE random neurons for tractable covariance
-    indices = sort(randperm(N)[1:COV_SUBSAMPLE])
-    X = brain.history[:, indices]  # HIST_DEPTH × COV_SUBSAMPLE on GPU
-
-    # Mean-center the activity matrix
-    μ = mean(X, dims=1)           # 1 × COV_SUBSAMPLE
-    X_centered = X .- μ           # HIST_DEPTH × COV_SUBSAMPLE
+    # Subsample (clamped so N < COV_SUBSAMPLE does not BoundsError).
+    indices = _cov_subsample_indices(N, COV_SUBSAMPLE)
+    X = brain.history[:, indices]  # HIST_DEPTH × k on GPU
 
     # Covariance via CUBLAS SYRK: C = (1/(T-1)) * Xᵀ * X
-    # 8192 × 8192 dense matmul — drives tensor core utilization
-    C = (X_centered' * X_centered) ./ Float32(HIST_DEPTH - 1)
+    C = _spike_history_covariance(X, HIST_DEPTH)
 
     CUDA.synchronize()
     return (C, indices)
@@ -846,6 +963,9 @@ Weights are `LOBE_WEIGHTS = Float32[0.4, 0.3, 0.2, 0.1]` (copied into `weights`)
 - `weights::Vector{Float32}`: per-lobe aggregation weights (sum to 1.0)
 - `desynchronized::Bool`: `true` after a failed [`ensemble_step!`](@ref);
   further steps and reads raise [`EnsembleDesynchronizedError`](@ref)
+
+Reuse an ensemble across trials with [`reset!`](@ref); release device memory
+with [`free!`](@ref). Do not rely on GC after `ensemble_step!(; sync=false)`.
 
 # Examples
 ```julia
@@ -929,10 +1049,7 @@ end
 function _commit_ensemble_aggregate!(eb::EnsembleBrain)
     prev = copy(eb.agg_output)
     try
-        eb.agg_output .= 0.0f0
-        for (i, lobe) in enumerate(eb.lobes)
-            eb.agg_output .+= eb.weights[i] .* lobe.output
-        end
+        _weighted_sum!(eb.agg_output, eb.weights, (lobe.output for lobe in eb.lobes))
     catch
         copyto!(eb.agg_output, prev)
         rethrow()
@@ -1020,11 +1137,7 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
     reflex_signal = Float32(reflex_signal)
     # Reflex gating boosts Fast-lobe *readout* Hebbian only (`reflex_eta`).
     # Recurrent pair-STDP always uses the caller's `recurrent_eta` (independent).
-    reflex_fast = if abs(reflex_signal) > 0.1f0
-        reflex_eta * 5.0f0   # 5× flash-learning rate
-    else
-        reflex_eta            # Normal learning rate
-    end
+    reflex_fast = _reflex_fast_eta(reflex_eta, reflex_signal)
 
     # Validate once before any STDP edge prewarm (avoids large allocs on bad kwargs).
     isempty(eb.lobes) || _validate_step_kwargs!(eb.lobes[1], u;
@@ -1046,7 +1159,7 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
         # barrier so a later CUDA.synchronize() failure cannot look like a
         # completed tick or leave a ghost history row.
         for (i, lobe) in enumerate(eb.lobes)
-            eta_lobe = (i == 1) ? reflex_fast : reflex_eta  # Lobe 1 = Fast
+            eta_lobe = _lobe_reflex_eta(i, reflex_eta, reflex_fast)  # Lobe 1 = Fast
             _step_impl!(lobe, u;
                 inhibition=inhibition,
                 reflex_eta=eta_lobe,
@@ -1073,7 +1186,7 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
             CUDA.synchronize()
             for (i, lobe) in enumerate(eb.lobes)
                 lobe.total_spikes += round(Int64, n_spikes[i])
-                lobe.last_spike_rate = n_spikes[i] / N
+                lobe.last_spike_rate = _spike_rate(n_spikes[i], N)
             end
         end
 
@@ -1255,12 +1368,12 @@ function ensemble_diagnostics(eb::EnsembleBrain)
     for (i, lobe) in enumerate(eb.lobes)
         rate_pct = round(lobe.last_spike_rate * 100, digits=2)
         if desync
-            push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=n/a",
-                eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct))
+            push!(lines, _format_lobe_diagnostics(
+                eb.lobe_names[i], lobe.tau_m, lobe.tick_count, rate_pct))
         else
             w_norm = round(Float64(norm(lobe.W_out)), digits=4)
-            push!(lines, @sprintf("[%s:τ=%d] tick=%d rate=%.2f%% W=%.4f",
-                eb.lobe_names[i], Int(lobe.tau_m), lobe.tick_count, rate_pct, w_norm))
+            push!(lines, _format_lobe_diagnostics(
+                eb.lobe_names[i], lobe.tau_m, lobe.tick_count, rate_pct, w_norm))
         end
     end
     prefix = desync ? "[DESYNC] " : ""

@@ -16,6 +16,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 
 - `src/LiquidCortex.jl` — Module definition, exports, `__init__`
 - `src/sparse_brain.jl` — SparseBrain (65k neurons/lobe), EnsembleBrain (4 lobes), `step!()`, STDP
+- `src/brain_lifecycle.jl` — `reset!(; keep_weights=true)`, `free!`
 - `src/reference_lsm.jl` — 2,048-neuron reference reservoir (lazy-init, configurable dims)
 - `test/runtests.jl` — Test suite (CPU + GPU tests gated by `_cuda_available`)
 - `docs/make.jl` — Documenter.jl site (CPU-buildable; examples are not doctested)
@@ -31,8 +32,10 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 
 ## Testing
 
-- CPU tests always run (package load, API exports, config validation)
-- GPU tests gated by `LiquidCortex._cuda_available[]`
+- CPU tests always run (package load, API exports, config validation, **host-side
+  reservoir kernels**: pair STDP, readout Hebbian, CSC, inhibition, aggregation)
+- GPU tests gated by `LiquidCortex._cuda_available[]` (no `@test_skip` literals)
+- Stochastic GPU cases seed host `Random` and `CUDA.seed!`
 - CI workflows run Julia **1.13** only. Compat declares `1.10, 1.11, 1.12`, which resolves to the range `[1.10, 2.0)` and therefore already admits 1.13 — but 1.10 and 1.11 are never built.
 - **CPU smoke:** `.github/workflows/ci.yml` → `ubuntu-latest`
 - **GPU tests:** `.github/workflows/gpu-ci.yml` → self-hosted runner labels
