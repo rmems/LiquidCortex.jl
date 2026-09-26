@@ -29,13 +29,13 @@ function snapshot_reference_lsm_state()
     # Copy reservoir state: run_lsm_step mutates _ref_x[] in-place.
     x_snap = LiquidCortex._ref_x[]
     return (
-        W = LiquidCortex._ref_W[],
-        Win = LiquidCortex._ref_Win[],
-        Wout = LiquidCortex._ref_Wout[],
-        x = isnothing(x_snap) ? nothing : copy(x_snap),
-        n_in = LiquidCortex._ref_n_in[],
-        n_out = LiquidCortex._ref_n_out[],
-        initialized = LiquidCortex._ref_initialized[],
+        W=LiquidCortex._ref_W[],
+        Win=LiquidCortex._ref_Win[],
+        Wout=LiquidCortex._ref_Wout[],
+        x=isnothing(x_snap) ? nothing : copy(x_snap),
+        n_in=LiquidCortex._ref_n_in[],
+        n_out=LiquidCortex._ref_n_out[],
+        initialized=LiquidCortex._ref_initialized[],
     )
 end
 
@@ -78,21 +78,11 @@ end
 
     @testset "Public API is exported" begin
         # Verify each name is both defined AND exported (not just defined)
-        exports = names(LiquidCortex; all = false)
-        for sym in [
-            :SparseBrain,
-            :EnsembleBrain,
-            :EnsembleDesynchronizedError,
-            :step!,
-            :ensemble_step!,
-            :get_output,
-            :get_ensemble_output,
-            :compute_reservoir_covariance!,
-            :diagnostics,
-            :ensemble_diagnostics,
-            :reset!,
-            :free!,
-        ]
+        exports = names(LiquidCortex; all=false)
+        for sym in [:SparseBrain, :EnsembleBrain, :EnsembleDesynchronizedError,
+                    :step!, :ensemble_step!, :get_output, :get_ensemble_output,
+                    :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
+                    :reset!, :free!]
             @test sym in exports
         end
         @test hasmethod(reset!, Tuple{SparseBrain})
@@ -102,7 +92,7 @@ end
     end
 
     @testset "Removed domain symbols are NOT exported" begin
-        exports = names(LiquidCortex; all = false)
+        exports = names(LiquidCortex; all=false)
         for sym in [:MarketPulse, :decode_market_pulse, :pulse_to_input]
             @test !(sym in exports)
         end
@@ -115,25 +105,20 @@ end
         @test :none in modes
         @test !(:typo in modes)
         # Real CPU-safe validator (no CuArray)
-        @test_throws LiquidCortex.LiquidCortexValidationError (LiquidCortex._validate_plasticity_kwargs(;
-            plasticity = :typo,
-            recurrent_eta = 1.0f-4,
-        ))
-        @test_throws LiquidCortex.LiquidCortexValidationError (LiquidCortex._validate_plasticity_kwargs(;
-            plasticity = :recurrent_stdp,
-            recurrent_eta = NaN32,
-        ))
-        LiquidCortex._validate_plasticity_kwargs(;
-            plasticity = :none,
-            recurrent_eta = NaN32,
+        @test_throws LiquidCortex.LiquidCortexValidationError (
+            LiquidCortex._validate_plasticity_kwargs(; plasticity=:typo, recurrent_eta=1f-4)
         )
+        @test_throws LiquidCortex.LiquidCortexValidationError (
+            LiquidCortex._validate_plasticity_kwargs(; plasticity=:recurrent_stdp, recurrent_eta=NaN32)
+        )
+        LiquidCortex._validate_plasticity_kwargs(; plasticity=:none, recurrent_eta=NaN32)
     end
 
     @testset "CPU: reset! kwargs" begin
-        LiquidCortex._validate_reset_kwargs(; keep_weights = true)
-        @test_throws LiquidCortex.LiquidCortexValidationError (LiquidCortex._validate_reset_kwargs(;
-            keep_weights = false,
-        ))
+        LiquidCortex._validate_reset_kwargs(; keep_weights=true)
+        @test_throws LiquidCortex.LiquidCortexValidationError (
+            LiquidCortex._validate_reset_kwargs(; keep_weights=false)
+        )
     end
 
     @testset "CPU: SparseBrain constructor validation" begin
@@ -144,10 +129,10 @@ end
         @test_throws ArgumentError SparseBrain(-1.0f0)
         @test_throws ArgumentError SparseBrain(NaN32)
         @test_throws ArgumentError SparseBrain(Inf32)
-        @test_throws ArgumentError SparseBrain(20.0f0; n_in = 0)
-        @test_throws ArgumentError SparseBrain(20.0f0; n_out = -3)
-        @test_throws ArgumentError EnsembleBrain(; n_in = 0)
-        @test_throws ArgumentError EnsembleBrain(; n_out = 0)
+        @test_throws ArgumentError SparseBrain(20.0f0; n_in=0)
+        @test_throws ArgumentError SparseBrain(20.0f0; n_out=-3)
+        @test_throws ArgumentError EnsembleBrain(; n_in=0)
+        @test_throws ArgumentError EnsembleBrain(; n_out=0)
 
         err = try
             SparseBrain(0.0f0)
@@ -168,8 +153,7 @@ end
         @test LiquidCortex._inhibited_threshold(1.0f0) ==
               LiquidCortex.V_THRESH + LiquidCortex.INHIBITION_GAIN
         @test LiquidCortex._inhibited_threshold(100.0f0) ==
-              LiquidCortex.V_THRESH +
-              LiquidCortex.MAX_INHIBITION * LiquidCortex.INHIBITION_GAIN
+              LiquidCortex.V_THRESH + LiquidCortex.MAX_INHIBITION * LiquidCortex.INHIBITION_GAIN
         @test LiquidCortex._inhibited_threshold(-1.0f0) == LiquidCortex.V_THRESH
 
         # Reflex gating: 5× only when |signal| > 0.1.
@@ -202,52 +186,26 @@ end
         pre_idx = Int32[1]
         post_idx = Int32[2]
         LiquidCortex._pair_stdp_apply!(
-            nzVal,
-            pre_idx,
-            post_idx,
-            Float32[1.0, 0.0],
-            Float32[0.0, 0.0],
-            Float32[0.0, 1.0],
-            eta,
-            w_max,
-        )
+            nzVal, pre_idx, post_idx,
+            Float32[1.0, 0.0], Float32[0.0, 0.0], Float32[0.0, 1.0], eta, w_max)
         @test nzVal[1] > Float16(0.5)
 
         nzVal = Float16[0.5]
         LiquidCortex._pair_stdp_apply!(
-            nzVal,
-            pre_idx,
-            post_idx,
-            Float32[0.0, 0.0],
-            Float32[0.0, 1.0],
-            Float32[1.0, 0.0],
-            eta,
-            w_max,
-        )
+            nzVal, pre_idx, post_idx,
+            Float32[0.0, 0.0], Float32[0.0, 1.0], Float32[1.0, 0.0], eta, w_max)
         @test nzVal[1] < Float16(0.5)
 
         nzVal = Float16[0.5]
         LiquidCortex._pair_stdp_apply!(
-            nzVal,
-            pre_idx,
-            post_idx,
-            Float32[1.0, 0.0],
-            Float32[0.0, 1.0],
-            Float32[1.0, 1.0],
-            0.0f0,
-            w_max,
-        )
+            nzVal, pre_idx, post_idx,
+            Float32[1.0, 0.0], Float32[0.0, 1.0], Float32[1.0, 1.0], 0.0f0, w_max)
         @test nzVal[1] == Float16(0.5)
 
         # Readout Hebbian: only positive outputs potentiate, in the trace direction.
         W = zeros(Float32, 2, 3)
         LiquidCortex._readout_hebbian_update!(
-            W,
-            Float32[1.0, -0.5],
-            Float32[1.0, 0.0, 2.0],
-            0.1f0,
-            1.0f0,
-        )
+            W, Float32[1.0, -0.5], Float32[1.0, 0.0, 2.0], 0.1f0, 1.0f0)
         @test W[1, 1] ≈ 0.1f0
         @test W[1, 2] ≈ 0.0f0
         @test W[1, 3] ≈ 0.2f0
@@ -255,12 +213,7 @@ end
 
         W_clamp = fill(0.95f0, 1, 1)
         LiquidCortex._readout_hebbian_update!(
-            W_clamp,
-            Float32[1.0],
-            Float32[1.0],
-            1.0f0,
-            1.0f0,
-        )
+            W_clamp, Float32[1.0], Float32[1.0], 1.0f0, 1.0f0)
         @test W_clamp[1, 1] == 1.0f0
 
         # CSC validation + edge-list construction (host arrays).
@@ -279,7 +232,8 @@ end
         outs = (ones(Float32, 4), fill(2.0f0, 4), zeros(Float32, 4), fill(0.5f0, 4))
         LiquidCortex._weighted_sum!(agg, Float32[0.4, 0.3, 0.2, 0.1], outs)
         @test all(agg .≈ 0.4f0 * 1 + 0.3f0 * 2 + 0.2f0 * 0 + 0.1f0 * 0.5f0)
-        @test_throws BoundsError LiquidCortex._weighted_sum!(agg, Float32[0.4, 0.3], outs)
+        @test_throws BoundsError LiquidCortex._weighted_sum!(
+            agg, Float32[0.4, 0.3], outs)
 
         # Covariance subsample clamps to N (would BoundsError at COV_SUBSAMPLE=8192).
         @test LiquidCortex._cov_subsample_count(256, 8192) == 256
@@ -316,17 +270,15 @@ end
         # or treating a distinct lobe tick as synchronized.
         @test LiquidCortex._ensemble_tick_mismatch(Int64[]) === nothing
         @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 4, 4]) === nothing
-        @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 5, 4]) ==
-              (Int64(4), 3, Int64(5))
+        @test LiquidCortex._ensemble_tick_mismatch(Int64[4, 4, 5, 4]) == (Int64(4), 3, Int64(5))
         LiquidCortex._assert_ticks_synchronized(Int64[0, 0, 0, 0])
-        LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized = false)
-        @test_throws LiquidCortex.EnsembleDesynchronizedError (LiquidCortex._assert_ticks_synchronized(
-            Int64[1, 1, 0, 1],
-        ))
-        @test_throws LiquidCortex.EnsembleDesynchronizedError (LiquidCortex._assert_ensemble_clocks(
-            Int64[1, 1, 1, 1];
-            desynchronized = true,
-        ))
+        LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized=false)
+        @test_throws LiquidCortex.EnsembleDesynchronizedError (
+            LiquidCortex._assert_ticks_synchronized(Int64[1, 1, 0, 1])
+        )
+        @test_throws LiquidCortex.EnsembleDesynchronizedError (
+            LiquidCortex._assert_ensemble_clocks(Int64[1, 1, 1, 1]; desynchronized=true)
+        )
         err = try
             LiquidCortex._assert_ticks_synchronized(Int64[1, 2])
         catch e
@@ -336,7 +288,7 @@ end
         @test occursin("desynchronized", err.msg)
         @test occursin("lobe 2", err.msg)
         poisoned = try
-            LiquidCortex._assert_ensemble_clocks(Int64[4, 4, 4, 4]; desynchronized = true)
+            LiquidCortex._assert_ensemble_clocks(Int64[4, 4, 4, 4]; desynchronized=true)
         catch e
             e
         end
@@ -349,8 +301,8 @@ end
 
     @testset "CPU: Reference LSM dimension validation" begin
         # Guards run before GPU allocation, so these are CPU-safe.
-        @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in = 0, n_out = 4)
-        @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in = 4, n_out = 0)
+        @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=0, n_out=4)
+        @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=4, n_out=0)
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
@@ -367,10 +319,14 @@ end
                     output = LiquidCortex.run_lsm_step(input, 0.5f0)
                     @test LiquidCortex._ref_is_initialized()
                     @test length(output) == LiquidCortex.REF_OUT_DEFAULT
-                    @test size(LiquidCortex._ref_Win[]) ==
-                          (LiquidCortex.REF_N, LiquidCortex.REF_IN_DEFAULT)
-                    @test size(LiquidCortex._ref_Wout[]) ==
-                          (LiquidCortex.REF_OUT_DEFAULT, LiquidCortex.REF_N)
+                    @test size(LiquidCortex._ref_Win[]) == (
+                        LiquidCortex.REF_N,
+                        LiquidCortex.REF_IN_DEFAULT,
+                    )
+                    @test size(LiquidCortex._ref_Wout[]) == (
+                        LiquidCortex.REF_OUT_DEFAULT,
+                        LiquidCortex.REF_N,
+                    )
                 finally
                     restore_reference_lsm_state!(original_state)
                 end
@@ -381,7 +337,7 @@ end
                 try
                     clear_reference_lsm_state!()
                     input = zeros(Float32, 8)
-                    output = LiquidCortex.run_lsm_step(input, 0.0f0; n_out = 4)
+                    output = LiquidCortex.run_lsm_step(input, 0.0f0; n_out=4)
                     @test length(output) == 4
                     @test LiquidCortex._ref_n_in[] == 8
                     @test LiquidCortex._ref_n_out[] == 4
@@ -434,25 +390,23 @@ end
 
         @testset "GPU: SparseBrain default dims" begin
             reclaim_gpu_hard!()
-            brain = SparseBrain(20.0f0; name = "test")
+            brain = SparseBrain(20.0f0; name="test")
             @test brain isa SparseBrain
             @test brain.tau_m == 20.0f0
             @test brain.tick_count == 0
             @test brain.n_in == 14
             @test brain.n_out == 16
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: SparseBrain custom dims" begin
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "custom")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="custom")
             @test brain isa SparseBrain
             @test brain.n_in == 8
             @test brain.n_out == 4
             @test length(brain.output) == 4
             @test size(brain.W_in, 2) == 8
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: EnsembleBrain default dims" begin
@@ -462,26 +416,24 @@ end
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 14
             @test ensemble.lobes[1].n_out == 16
-            free!(ensemble)
-            reclaim_gpu_hard!()
+            free!(ensemble); reclaim_gpu_hard!()
         end
 
         @testset "GPU: EnsembleBrain custom dims" begin
             reclaim_gpu_hard!()
-            ensemble = EnsembleBrain(n_in = 8, n_out = 4)
+            ensemble = EnsembleBrain(n_in=8, n_out=4)
             @test ensemble isa EnsembleBrain
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 8
             @test ensemble.lobes[1].n_out == 4
-            free!(ensemble)
-            reclaim_gpu_hard!()
+            free!(ensemble); reclaim_gpu_hard!()
         end
 
         @testset "GPU: step! with generic inhibition" begin
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "step-test")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="step-test")
             u = CUDA.zeros(Float32, 8)
             W0 = copy(Array(brain.W_out))
-            step!(brain, u; inhibition = 0.5f0)
+            step!(brain, u; inhibition=0.5f0)
             @test brain.tick_count == 1
             @test brain.v_thresh_dynamic > LiquidCortex.V_THRESH
             reset!(brain)
@@ -498,11 +450,8 @@ end
             @test iszero(CUDA.maximum(abs, brain.trace_pre))
             @test iszero(CUDA.maximum(abs, brain.history))
             @test Array(brain.W_out) == W0
-            @test_throws LiquidCortex.LiquidCortexValidationError reset!(
-                brain;
-                keep_weights = false,
-            )
-            step!(brain, u; inhibition = 0.1f0)
+            @test_throws LiquidCortex.LiquidCortexValidationError reset!(brain; keep_weights=false)
+            step!(brain, u; inhibition=0.1f0)
             @test brain.tick_count == 1
             free!(brain)
             free!(brain)  # idempotent
@@ -514,35 +463,29 @@ end
             # (a second EnsembleBrain late in the suite OOMs on 16GB after pool growth).
             seed_test_rng!(20260915)
             reclaim_gpu_hard!()
-            ensemble = EnsembleBrain(n_in = 8, n_out = 4)
+            ensemble = EnsembleBrain(n_in=8, n_out=4)
             try
                 u = CUDA.zeros(Float32, 8)
-                ensemble_step!(ensemble, u; inhibition = 0.3f0, reflex_signal = 0.2f0)
+                ensemble_step!(ensemble, u; inhibition=0.3f0, reflex_signal=0.2f0)
                 output = get_ensemble_output(ensemble)
                 @test length(output) == 4
                 W0 = [copy(Array(l.W_out)) for l in ensemble.lobes]
                 u_act = cu(randn(Float32, 8) .* 0.2f0)
                 n_steps = 5
-                for _ = 1:n_steps
-                    ensemble_step!(ensemble, u_act; plasticity = :none, inhibition = 0.1f0)
+                for _ in 1:n_steps
+                    ensemble_step!(ensemble, u_act; plasticity=:none, inhibition=0.1f0)
                 end
                 @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
-                @test all(
-                    Array(ensemble.lobes[i].W_out) == W0[i] for
-                    i in eachindex(ensemble.lobes)
-                )
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
 
                 reset!(ensemble)
                 @test all(l.tick_count == 0 for l in ensemble.lobes)
                 @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
                 @test iszero(CUDA.maximum(abs, ensemble.agg_output))
-                @test all(
-                    Array(ensemble.lobes[i].W_out) == W0[i] for
-                    i in eachindex(ensemble.lobes)
-                )
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
                 @test ensemble.desynchronized == false
 
-                ensemble_step!(ensemble, u; plasticity = :none, inhibition = 0.1f0)
+                ensemble_step!(ensemble, u; plasticity=:none, inhibition=0.1f0)
                 saved_agg = copy(Array(ensemble.agg_output))
                 saved_weights = copy(ensemble.weights)
                 @test ensemble.desynchronized == false
@@ -553,15 +496,11 @@ end
                 ensemble.weights = saved_weights
 
                 ensemble.lobes[3].tick_count += 1
-                @test_throws LiquidCortex.EnsembleDesynchronizedError (ensemble_step!(
-                    ensemble,
-                    u_act;
-                    plasticity = :none,
-                ))
-                @test ensemble.desynchronized == false
-                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(
-                    ensemble,
+                @test_throws LiquidCortex.EnsembleDesynchronizedError (
+                    ensemble_step!(ensemble, u_act; plasticity=:none)
                 )
+                @test ensemble.desynchronized == false
+                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
                 @test Array(ensemble.agg_output) == saved_agg
                 @test ensemble.lobes[3].tick_count == ensemble.lobes[1].tick_count + 1
                 diag_mismatch = ensemble_diagnostics(ensemble)
@@ -571,22 +510,15 @@ end
                 ensemble.lobes[3].tick_count -= 1
                 ensemble.weights = saved_weights[1:2]
                 ticks_before_poison = [l.tick_count for l in ensemble.lobes]
-                @test_throws BoundsError ensemble_step!(ensemble, u_act; plasticity = :none)
+                @test_throws BoundsError ensemble_step!(ensemble, u_act; plasticity=:none)
                 @test ensemble.desynchronized
-                @test all(
-                    l.tick_count == ticks_before_poison[i] for
-                    (i, l) in enumerate(ensemble.lobes)
-                )
+                @test all(l.tick_count == ticks_before_poison[i] for (i, l) in enumerate(ensemble.lobes))
                 @test Array(ensemble.agg_output) == saved_agg
                 ensemble.weights = saved_weights
-                @test_throws LiquidCortex.EnsembleDesynchronizedError (ensemble_step!(
-                    ensemble,
-                    u_act;
-                    plasticity = :none,
-                ))
-                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(
-                    ensemble,
+                @test_throws LiquidCortex.EnsembleDesynchronizedError (
+                    ensemble_step!(ensemble, u_act; plasticity=:none)
                 )
+                @test_throws LiquidCortex.EnsembleDesynchronizedError get_ensemble_output(ensemble)
                 diag_poison = ensemble_diagnostics(ensemble)
                 @test startswith(diag_poison, "[DESYNC]")
                 @test occursin("W=n/a", diag_poison)
@@ -597,10 +529,7 @@ end
                 @test all(l.tick_count == 0 for l in ensemble.lobes)
                 @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
                 @test iszero(CUDA.maximum(abs, ensemble.agg_output))
-                @test all(
-                    Array(ensemble.lobes[i].W_out) == W0[i] for
-                    i in eachindex(ensemble.lobes)
-                )
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
             finally
                 free!(ensemble)
                 free!(ensemble)  # idempotent
@@ -609,7 +538,7 @@ end
         end
 
         @testset "GPU: failed step! does not commit tick or history" begin
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-clock-last")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-clock-last")
             u = CUDA.zeros(Float32, 8)
             tick0 = brain.tick_count
             hist0 = brain.hist_idx
@@ -627,58 +556,42 @@ end
             @test brain.hist_idx == hist0
             @test brain.total_spikes == spikes0
             @test brain.last_spike_rate == rate0
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: default step! advances tick and keeps finite output" begin
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-default")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-default")
             u = CUDA.zeros(Float32, 8)
-            step!(brain, u; inhibition = 0.1f0)
+            step!(brain, u; inhibition=0.1f0)
             @test brain.tick_count == 1
             @test all(isfinite, Array(get_output(brain)))
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: plasticity=:none freezes W_out" begin
             seed_test_rng!(20260915)
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-none")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-none")
             u = cu(randn(Float32, 8) .* 0.2f0)
             W0 = copy(Array(brain.W_out))
-            for _ = 1:40
-                step!(brain, u; plasticity = :none, inhibition = 0.1f0)
+            for _ in 1:40
+                step!(brain, u; plasticity=:none, inhibition=0.1f0)
             end
             @test Array(brain.W_out) == W0
             @test brain.tick_count == 40
+            @test_throws LiquidCortex.LiquidCortexValidationError step!(brain, u; plasticity=:typo)
             @test_throws LiquidCortex.LiquidCortexValidationError step!(
-                brain,
-                u;
-                plasticity = :typo,
-            )
-            @test_throws LiquidCortex.LiquidCortexValidationError step!(
-                brain,
-                u;
-                plasticity = :recurrent_stdp,
-                recurrent_eta = NaN32,
-            )
-            free!(brain)
-            reclaim_gpu!()
+                brain, u; plasticity=:recurrent_stdp, recurrent_eta=NaN32)
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: plasticity=:readout_only updates W_out in Hebbian direction" begin
             seed_test_rng!(20260915)
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-ro")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-ro")
             u = cu(randn(Float32, 8) .* 0.3f0)
             W0 = copy(Array(brain.W_out))
-            for _ = 1:50
-                step!(
-                    brain,
-                    u;
-                    plasticity = :readout_only,
-                    inhibition = 0.05f0,
-                    reflex_eta = 1.0f-2,
-                )
+            for _ in 1:50
+                step!(brain, u; plasticity=:readout_only, inhibition=0.05f0,
+                      reflex_eta=1f-2)
             end
             @test brain.tick_count == 50
             @test all(isfinite, Array(get_output(brain)))
@@ -687,92 +600,73 @@ end
             # Host kernel on the last traces/output must match the same sign rule.
             W_dir = copy(W0)
             LiquidCortex._readout_hebbian_update!(
-                W_dir,
-                Float32[1.0, 1.0, 1.0, 1.0],
-                ones(Float32, LiquidCortex.N),
-                0.01f0,
-                LiquidCortex.W_MAX,
-            )
+                W_dir, Float32[1.0, 1.0, 1.0, 1.0], ones(Float32, LiquidCortex.N),
+                0.01f0, LiquidCortex.W_MAX)
             @test all(W_dir .>= W0)
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: record_history=false steps without filling history" begin
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-hist")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-hist")
             u = CUDA.zeros(Float32, 8)
-            step!(brain, u; record_history = false)
+            step!(brain, u; record_history=false)
             @test brain.tick_count == 1
             @test brain.hist_full == false
             @test brain.hist_idx == 1
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: sync=false advances tick (caller may sync)" begin
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-sync")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-sync")
             u = CUDA.zeros(Float32, 8)
-            step!(brain, u; sync = false)
+            step!(brain, u; sync=false)
             CUDA.synchronize()
             @test brain.tick_count == 1
             @test all(isfinite, Array(get_output(brain)))
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: use_device_noise=true stays finite" begin
             seed_test_rng!(20260915)
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-noise")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-noise")
             u = CUDA.zeros(Float32, 8)
-            for _ = 1:20
-                step!(brain, u; use_device_noise = true, record_history = false)
+            for _ in 1:20
+                step!(brain, u; use_device_noise=true, record_history=false)
             end
             @test brain.tick_count == 20
             @test all(isfinite, Array(get_output(brain)))
-            free!(brain)
-            reclaim_gpu!()
+            free!(brain); reclaim_gpu!()
         end
 
         @testset "GPU: recurrent_stdp mutates sparse W.nzVal" begin
             seed_test_rng!(20260915)
             reclaim_gpu_hard!()
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-stdp")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-stdp")
             u = cu(randn(Float32, 8) .* 0.35f0)
             # eta=0 must not clamp/rewrite constructor weights before learning
             w_init = copy(Array(brain.W.nzVal))
-            for _ = 1:5
-                step!(
-                    brain,
-                    u;
-                    plasticity = :recurrent_stdp,
-                    recurrent_eta = 0.0f0,
-                    record_history = false,
-                )
+            for _ in 1:5
+                step!(brain, u; plasticity=:recurrent_stdp, recurrent_eta=0.0f0,
+                      record_history=false)
             end
             @test Array(brain.W.nzVal) == w_init
             w0 = copy(Array(brain.W.nzVal))
-            for _ = 1:30
-                step!(
-                    brain,
-                    u;
-                    plasticity = :recurrent_stdp,
-                    recurrent_eta = 1.0f-3,
-                    record_history = false,
-                )
+            for _ in 1:30
+                step!(brain, u; plasticity=:recurrent_stdp, recurrent_eta=1f-3,
+                      record_history=false)
             end
             @test Array(brain.W.nzVal) != w0
             @test all(isfinite, Array(get_output(brain)))
             # Drop lazy STDP edge buffers before reclaim
             brain.pre_idx = CUDA.zeros(Int32, 0)
             brain.post_idx = CUDA.zeros(Int32, 0)
-            free!(brain)
-            reclaim_gpu_hard!()
+            free!(brain); reclaim_gpu_hard!()
         end
 
         @testset "GPU: pair STDP LTP/LTD on a known edge" begin
             seed_test_rng!(20260915)
             reclaim_gpu_hard!()
-            brain = SparseBrain(20.0f0; n_in = 8, n_out = 4, name = "tdd-stdp-dir")
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="tdd-stdp-dir")
             LiquidCortex._ensure_edge_indices!(brain)
             @test brain.nnz > 0
             pre = Array(brain.pre_idx)
@@ -792,7 +686,7 @@ end
             copyto!(brain.trace_pre, trace_pre)
             fill!(brain.trace_post, 0.0f0)
             w_before = Array(brain.W.nzVal)[edge]
-            LiquidCortex._apply_pair_stdp!(brain; eta = 0.1f0)
+            LiquidCortex._apply_pair_stdp!(brain; eta=0.1f0)
             w_ltp = Array(brain.W.nzVal)[edge]
             @test w_ltp > w_before
 
@@ -804,14 +698,13 @@ end
             copyto!(brain.S, S)
             fill!(brain.trace_pre, 0.0f0)
             copyto!(brain.trace_post, trace_post)
-            LiquidCortex._apply_pair_stdp!(brain; eta = 0.1f0)
+            LiquidCortex._apply_pair_stdp!(brain; eta=0.1f0)
             w_ltd = Array(brain.W.nzVal)[edge]
             @test w_ltd < w_ltp
 
             brain.pre_idx = CUDA.zeros(Int32, 0)
             brain.post_idx = CUDA.zeros(Int32, 0)
-            free!(brain)
-            reclaim_gpu_hard!()
+            free!(brain); reclaim_gpu_hard!()
         end
     else
         @info "Skipping GPU tests — no CUDA device available"
