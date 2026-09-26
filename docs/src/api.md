@@ -20,7 +20,6 @@ membrane
 traces
 diagnostics
 ensemble_diagnostics
-enable_telemetry!
 run_lsm_step
 run_lsm_step_str
 ```

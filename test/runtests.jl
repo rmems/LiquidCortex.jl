@@ -3,7 +3,6 @@
 using Test
 using LiquidCortex
 using CUDA
-using Sentry
 using LinearAlgebra: norm
 using Random
 
@@ -85,7 +84,7 @@ end
                     :compute_reservoir_covariance, :compute_reservoir_covariance!,
                     :spikes, :membrane, :traces,
                     :diagnostics, :ensemble_diagnostics,
-                    :reset!, :free!, :enable_telemetry!,
+                    :reset!, :free!,
                     :LiquidCortexValidationError, :ETA, :MAX_INHIBITION,
                     :run_lsm_step, :run_lsm_step_str,
                     :REF_N, :REF_IN_DEFAULT, :REF_OUT_DEFAULT]
@@ -126,10 +125,6 @@ end
             LiquidCortex._validate_plasticity_kwargs(; plasticity=:recurrent_stdp, recurrent_eta=NaN32)
         )
         LiquidCortex._validate_plasticity_kwargs(; plasticity=:none, recurrent_eta=NaN32)
-        @test LiquidCortex._should_capture_runtime_exception(
-            LiquidCortexValidationError("x")) == false
-        @test LiquidCortex._should_capture_runtime_exception(ErrorException("x")) == true
-        @test LiquidCortex._should_capture_runtime_exception(ArgumentError("internal")) == true
     end
 
     @testset "CPU: reset! kwargs" begin
@@ -161,7 +156,6 @@ end
         end
         @test err isa ArgumentError
         @test occursin("tau_m", err.msg)
-        @test LiquidCortex._should_capture_runtime_exception(err) == true
 
         # No leaked all-fields positional constructor (would dominate MethodError).
         ctor_nargs = map(methods(SparseBrain)) do m
@@ -353,8 +347,6 @@ end
         desync_lobe = LiquidCortex._format_lobe_diagnostics("Fast", 10.0f0, 1, 1.23)
         @test occursin("W=n/a", desync_lobe)
 
-        @test LiquidCortex._should_capture_runtime_exception(
-            LiquidCortex.LiquidCortexValidationError("x")) == false
         if CUDA.functional()
             dest = CUDA.zeros(Float32, 4)
             @test_throws LiquidCortex.LiquidCortexValidationError (
@@ -391,7 +383,6 @@ end
         @test err isa LiquidCortex.EnsembleDesynchronizedError
         @test occursin("desynchronized", err.msg)
         @test occursin("lobe 2", err.msg)
-        @test LiquidCortex._should_capture_runtime_exception(err) == true
         poisoned = try
             LiquidCortex._assert_ensemble_clocks(Int64[4, 4, 4, 4]; desynchronized=true)
         catch e
@@ -399,7 +390,6 @@ end
         end
         @test poisoned isa LiquidCortex.EnsembleDesynchronizedError
         @test occursin("unusable", poisoned.msg)
-        @test LiquidCortex._should_capture_runtime_exception(poisoned) == true
         @test LiquidCortex._ensemble_diag_desync(false, Int64[1, 1, 1, 1]) == false
         @test LiquidCortex._ensemble_diag_desync(true, Int64[1, 1, 1, 1]) == true
         @test LiquidCortex._ensemble_diag_desync(false, Int64[1, 1, 2, 1]) == true
@@ -409,23 +399,6 @@ end
         # Guards run before GPU allocation, so these are CPU-safe.
         @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=0, n_out=4)
         @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=4, n_out=0)
-    end
-
-    @testset "CPU: Sentry opt-in" begin
-        @test !LiquidCortex._sentry_dsn_usable("")
-        @test !LiquidCortex._sentry_dsn_usable("http://abc@host/1")
-        @test !LiquidCortex._sentry_dsn_usable("not-a-dsn")
-        @test LiquidCortex._sentry_dsn_usable("https://abcdef1234567890@a12345.us.sentry.io/1234567890123456789")
-        @test_throws LiquidCortex.LiquidCortexValidationError enable_telemetry!("http://abc@host/1")
-        @test_throws LiquidCortex.LiquidCortexValidationError enable_telemetry!("not-a-dsn")
-        if isempty(get(ENV, "LIQUIDCORTEX_SENTRY_DSN", ""))
-            @test LiquidCortex._sentry_enabled[] == false
-        end
-        tags = LiquidCortex._runtime_exception_tags(ErrorException("x"))
-        @test tags["package"] == "LiquidCortex.jl"
-        @test tags["gpu_failure"] == "false"
-        @test tags["error_class"] == "runtime"
-        @test !haskey(Sentry.global_tags, "error_class")
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.

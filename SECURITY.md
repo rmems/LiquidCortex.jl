@@ -16,5 +16,4 @@ Please use GitHub's private
 
 Do not open a public issue for a vulnerability.
 
-In scope: CUDA artifact resolution, workflow secrets, `LIQUIDCORTEX_SENTRY_DSN`
-handling, and the self-hosted GPU runner.
+In scope: CUDA artifact resolution, workflow secrets, and the self-hosted GPU runner.

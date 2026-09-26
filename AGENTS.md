@@ -52,16 +52,6 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - Pin GitHub Actions to full commit SHAs (not tags)
 - Use `julia-actions/julia-processcoverage` for coverage — not Coverage.jl in Project.toml
 - README must use pure markdown — no HTML elements (Codacy lints `<a>` and `<img>`)
-
-## Sentry
-
-- Runtime capture is opt-in via `ENV["LIQUIDCORTEX_SENTRY_DSN"]` or
-  `enable_telemetry!(dsn)` (see `.env.example`). Generic `SENTRY_DSN` is
-  ignored so a host application's Sentry client is not overwritten.
-- DSN **must** target project **`liquidcortex`** (`SENTRY_ORG=limen-neural`, `SENTRY_PROJECT=liquidcortex`).
-- Do **not** reuse the **rust** project DSN — events will misroute (issue IDs like `RUST-*` with `package=LiquidCortex.jl`).
-- Quick check: DSN path suffix for liquidcortex is `…/4511697978982400` (rust ends in `…/4511355448066048`).
-
 ## Cursor Cloud specific instructions
 
 - Julia is provided via `juliaup` with default channel **1.13** (admitted by this repo's `1.10, 1.11, 1.12` compat, which spans [1.10, 2.0)). Standard setup applies: `julia --project -e 'using Pkg; Pkg.instantiate()'` then `julia --project -e 'using Pkg; Pkg.test()'`.

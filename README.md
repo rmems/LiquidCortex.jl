@@ -82,7 +82,6 @@ small-scale path until reservoir size is configurable.
 | `reset!(brain)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
 | `free!(brain)` / `free!(eb)` | Release GPU buffers into the CUDA.jl pool |
 | `EnsembleDesynchronizedError` | Raised when lobe clocks disagree or a prior ensemble step failed |
-| `enable_telemetry!(dsn)` | Opt in to Sentry capture (HTTPS DSN; does not read `SENTRY_DSN`) |
 
 ## Experimental step API
 
