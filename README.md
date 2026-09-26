@@ -76,7 +76,6 @@ output = get_output(brain)
 | `diagnostics(brain)` | Return diagnostic string |
 | `ensemble_diagnostics(eb)` | Per-lobe diagnostic summary |
 | `EnsembleDesynchronizedError` | Raised when lobe clocks disagree or a prior ensemble step failed |
-| `enable_telemetry!(dsn)` | Opt in to Sentry capture (HTTPS DSN; does not read `SENTRY_DSN`) |
 
 ## Experimental step API
 
