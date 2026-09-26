@@ -360,6 +360,8 @@ end
         diag_named = LiquidCortex._format_diagnostics(
             1, 10, 0.0123f0, -50.0f0, 1.2345; name="lobe-a")
         @test occursin("[brain:lobe-a]", diag_named)
+        @test occursin("[brain] tick=", LiquidCortex._format_diagnostics(
+            1, 10, 0.0123f0, -50.0f0, 1.2345))
         @test LiquidCortex._device_memory_gb(15_000_000_000) ≈ 15.0 rtol=0.01
         @test LiquidCortex._vram_meets_floor(15_000_000_000, 14)
         @test !LiquidCortex._vram_meets_floor(10_000_000_000, 14)
@@ -549,6 +551,8 @@ end
             @test brain.v_thresh_dynamic > LiquidCortex.V_THRESH
             step!(brain, zeros(Float64, 8))
             @test brain.tick_count == 2
+            step!(brain, CUDA.zeros(Float32, 8))
+            @test brain.tick_count == 3
             @test_throws LiquidCortexValidationError step!(brain, zeros(Float32, 3))
             @test length(spikes(brain)) == LiquidCortex.N
             @test length(membrane(brain)) == LiquidCortex.N
