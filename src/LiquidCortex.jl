@@ -177,6 +177,7 @@ export enable_telemetry!
 # `__init__` has not run, so probe the device directly. Skip the reference LSM.
 @compile_workload begin
     _validate_plasticity_kwargs(; plasticity=:readout_only, recurrent_eta=1.0f-4)
+    _validate_reset_kwargs(; keep_weights=true)
     _should_capture_runtime_exception(ErrorException("precompile"))
     if CUDA.functional()
         precompile(SparseBrain, (Float32,))
