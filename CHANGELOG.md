@@ -29,10 +29,10 @@ change under `0.2.0`.
 - CI-only Manifest at `.github/ci-manifest/Manifest.toml` (Julia 1.13). Root
   `Manifest.toml` stays gitignored so library consumers are not pinned.
 
-### Changed
+### Removed
 
-- GPU CI scopes `LIQUIDCORTEX_SENTRY_DSN` to the test step instead of the job.
-- `sentry-release.yml` no longer parses a workspace `.env` into `$GITHUB_ENV`.
+- Sentry integration (`Sentry.jl`, `enable_telemetry!`, CI preflight/release
+  workflows, and related env/docs).
 
 ### Fixed
 
