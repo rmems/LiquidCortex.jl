@@ -81,10 +81,23 @@ end
         exports = names(LiquidCortex; all=false)
         for sym in [:SparseBrain, :EnsembleBrain, :EnsembleDesynchronizedError,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
-                    :compute_reservoir_covariance!, :diagnostics, :ensemble_diagnostics,
-                    :reset!, :free!]
+                    :compute_reservoir_covariance, :compute_reservoir_covariance!,
+                    :spikes, :membrane, :traces,
+                    :diagnostics, :ensemble_diagnostics,
+                    :reset!, :free!,
+                    :LiquidCortexValidationError, :ETA, :MAX_INHIBITION,
+                    :run_lsm_step, :run_lsm_step_str,
+                    :REF_N, :REF_IN_DEFAULT, :REF_OUT_DEFAULT]
             @test sym in exports
         end
+        # Documented names resolve unqualified after `using LiquidCortex`.
+        @test LiquidCortexValidationError isa DataType
+        @test ETA == 0.001f0
+        @test MAX_INHIBITION == 3.0f0
+        @test REF_N == 2048
+        @test run_lsm_step isa Function
+        @test compute_reservoir_covariance! === compute_reservoir_covariance
+        @test parentmodule(step!) === LiquidCortex.CommonSolve
         @test hasmethod(reset!, Tuple{SparseBrain})
         @test hasmethod(reset!, Tuple{EnsembleBrain})
         @test hasmethod(free!, Tuple{SparseBrain})
@@ -105,10 +118,10 @@ end
         @test :none in modes
         @test !(:typo in modes)
         # Real CPU-safe validator (no CuArray)
-        @test_throws LiquidCortex.LiquidCortexValidationError (
+        @test_throws LiquidCortexValidationError (
             LiquidCortex._validate_plasticity_kwargs(; plasticity=:typo, recurrent_eta=1f-4)
         )
-        @test_throws LiquidCortex.LiquidCortexValidationError (
+        @test_throws LiquidCortexValidationError (
             LiquidCortex._validate_plasticity_kwargs(; plasticity=:recurrent_stdp, recurrent_eta=NaN32)
         )
         LiquidCortex._validate_plasticity_kwargs(; plasticity=:none, recurrent_eta=NaN32)
@@ -126,6 +139,8 @@ end
         # are CPU-safe. Exception type is pinned to ArgumentError to match
         # n_in/n_out and the reference LSM (not LiquidCortexValidationError).
         @test_throws ArgumentError SparseBrain(0.0f0)
+        @test_throws ArgumentError SparseBrain(0.0)   # Float64
+        @test_throws ArgumentError SparseBrain(0)     # Int
         @test_throws ArgumentError SparseBrain(-1.0f0)
         @test_throws ArgumentError SparseBrain(NaN32)
         @test_throws ArgumentError SparseBrain(Inf32)
@@ -141,6 +156,97 @@ end
         end
         @test err isa ArgumentError
         @test occursin("tau_m", err.msg)
+
+        # No leaked all-fields positional constructor (would dominate MethodError).
+        ctor_nargs = map(methods(SparseBrain)) do m
+            sig = m.sig
+            while sig isa UnionAll
+                sig = sig.body
+            end
+            length(sig.parameters)
+        end
+        @test nfields(SparseBrain) + 1 ∉ ctor_nargs
+        err_partial = try
+            SparseBrain(Val(:new))
+        catch e
+            e
+        end
+        @test err_partial isa ArgumentError
+        @test occursin("fields", err_partial.msg)
+        err_short = try
+            SparseBrain(Val(:new), 1, 2, 3)
+        catch e
+            e
+        end
+        @test err_short isa ArgumentError
+        @test occursin("fields", err_short.msg)
+    end
+
+    @testset "CPU: _require_cuda messaging" begin
+        if LiquidCortex._cuda_available[]
+            # GPU runner: device is present; assert the under-VRAM error path.
+            err = try
+                LiquidCortex._require_cuda("SparseBrain"; min_vram_gb=1e12)
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("SparseBrain", err.msg)
+            @test occursin("GB", err.msg)
+        else
+            err = try
+                LiquidCortex._require_cuda("SparseBrain"; min_vram_gb=14)
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("SparseBrain", err.msg)
+            @test occursin("14", err.msg)
+        end
+    end
+
+    @testset "CPU: CUDA guard fails fast (no COO draw)" begin
+        if LiquidCortex._cuda_available[]
+            @test_skip "CUDA present — constructor GPU-guard timing covered on CPU CI"
+        else
+            elapsed = @elapsed begin
+                err = try
+                    SparseBrain(20.0)
+                catch e
+                    e
+                end
+                @test err isa ErrorException
+                @test occursin("CUDA", err.msg)
+                @test occursin("14 GB", err.msg)
+                @test occursin("SparseBrain", err.msg)
+            end
+            @test elapsed < 2.0
+
+            err_int = try
+                SparseBrain(20)
+            catch e
+                e
+            end
+            @test err_int isa ErrorException
+            @test occursin("CUDA", err_int.msg)
+
+            err_ens = try
+                EnsembleBrain()
+            catch e
+                e
+            end
+            @test err_ens isa ErrorException
+            @test occursin("CUDA", err_ens.msg)
+
+            err_ref = try
+                run_lsm_step(zeros(Float32, 16), 0.0f0)
+            catch e
+                e
+            end
+            @test err_ref isa ErrorException
+            @test occursin("CUDA", err_ref.msg)
+            @test occursin("Reference LSM", err_ref.msg)
+        end
     end
 
     @testset "CPU: CUDA availability matches CUDA.functional" begin
@@ -251,6 +357,14 @@ end
         @test C ≈ Float32[4 4; 4 4]
 
         diag = LiquidCortex._format_diagnostics(1, 10, 0.0123f0, -50.0f0, 1.2345)
+        diag_named = LiquidCortex._format_diagnostics(
+            1, 10, 0.0123f0, -50.0f0, 1.2345; name="lobe-a")
+        @test occursin("[brain:lobe-a]", diag_named)
+        @test occursin("[brain] tick=", LiquidCortex._format_diagnostics(
+            1, 10, 0.0123f0, -50.0f0, 1.2345))
+        @test LiquidCortex._device_memory_gb(15_000_000_000) ≈ 15.0 rtol=0.01
+        @test LiquidCortex._vram_meets_floor(15_000_000_000, 14)
+        @test !LiquidCortex._vram_meets_floor(10_000_000_000, 14)
         @test occursin("tick=1", diag)
         @test occursin("spikes=10", diag)
         @test occursin("rate=1.23%", diag)
@@ -263,6 +377,19 @@ end
         @test occursin("rate=1.23%", lobe)
         desync_lobe = LiquidCortex._format_lobe_diagnostics("Fast", 10.0f0, 1, 1.23)
         @test occursin("W=n/a", desync_lobe)
+
+        if CUDA.functional()
+            dest = CUDA.zeros(Float32, 4)
+            @test_throws LiquidCortex.LiquidCortexValidationError (
+                LiquidCortex._upload_input!(dest, Float32[1, 2, 3])
+            )
+        end
+    end
+
+    @testset "CPU: lifecycle frees host step! input buffer" begin
+        lifecycle_src = read(
+            joinpath(@__DIR__, "..", "src", "brain_lifecycle.jl"), String)
+        @test occursin("CUDA.unsafe_free!(brain.u_buf)", lifecycle_src)
     end
 
     @testset "CPU: ensemble clock desync detection" begin
@@ -316,7 +443,7 @@ end
 
                     # First call triggers lazy GPU init from input length / default n_out.
                     input = zeros(Float32, LiquidCortex.REF_IN_DEFAULT)
-                    output = LiquidCortex.run_lsm_step(input, 0.5f0)
+                    output = run_lsm_step(input, 0.5f0)
                     @test LiquidCortex._ref_is_initialized()
                     @test length(output) == LiquidCortex.REF_OUT_DEFAULT
                     @test size(LiquidCortex._ref_Win[]) == (
@@ -337,7 +464,7 @@ end
                 try
                     clear_reference_lsm_state!()
                     input = zeros(Float32, 8)
-                    output = LiquidCortex.run_lsm_step(input, 0.0f0; n_out=4)
+                    output = run_lsm_step(input, 0.0f0; n_out=4)
                     @test length(output) == 4
                     @test LiquidCortex._ref_n_in[] == 8
                     @test LiquidCortex._ref_n_out[] == 4
@@ -354,7 +481,7 @@ end
                     clear_reference_lsm_state!()
                     # Init with 16 inputs, then reject a mismatched length.
                     LiquidCortex.run_lsm_step(zeros(Float32, 16), 0.0f0)
-                    @test_throws DimensionMismatch LiquidCortex.run_lsm_step(
+                    @test_throws DimensionMismatch run_lsm_step(
                         zeros(Float32, 8),
                         0.0f0,
                     )
@@ -367,7 +494,7 @@ end
                 original_state = snapshot_reference_lsm_state()
                 try
                     clear_reference_lsm_state!()
-                    output = LiquidCortex.run_lsm_step_str(zeros(Float32, 16), 0.0f0)
+                    output = run_lsm_step_str(zeros(Float32, 16), 0.0f0)
                     parts = split(output, ",")
 
                     @test output isa String
@@ -388,6 +515,17 @@ end
     if LiquidCortex._cuda_available[]
         seed_test_rng!(20260915)
 
+        @testset "GPU: _require_cuda VRAM floor" begin
+            @test LiquidCortex._require_cuda("Probe"; min_vram_gb=1) === nothing
+            err_vram = try
+                LiquidCortex._require_cuda("Probe"; min_vram_gb=1e12)
+            catch e
+                e
+            end
+            @test err_vram isa ErrorException
+            @test occursin("GB", err_vram.msg)
+        end
+
         @testset "GPU: SparseBrain default dims" begin
             reclaim_gpu_hard!()
             brain = SparseBrain(20.0f0; name="test")
@@ -396,7 +534,37 @@ end
             @test brain.tick_count == 0
             @test brain.n_in == 14
             @test brain.n_out == 16
+            @test brain.name == "test"
+            shown = sprint(show, brain)
+            @test occursin("SparseBrain", shown)
+            @test occursin("test", shown)
+            @test length(shown) < 400
             free!(brain); reclaim_gpu!()
+        end
+
+        @testset "GPU: SparseBrain Real tau_m + host-vector step!" begin
+            brain = SparseBrain(20.0; n_in=8, n_out=4, name="host-u")
+            @test brain.tau_m == 20.0f0
+            @test brain.name == "host-u"
+            step!(brain, zeros(Float32, 8); inhibition=0.5f0)
+            @test brain.tick_count == 1
+            @test brain.v_thresh_dynamic > LiquidCortex.V_THRESH
+            step!(brain, zeros(Float64, 8))
+            @test brain.tick_count == 2
+            step!(brain, CUDA.zeros(Float32, 8))
+            @test brain.tick_count == 3
+            @test_throws LiquidCortexValidationError step!(brain, zeros(Float32, 3))
+            @test length(spikes(brain)) == LiquidCortex.N
+            @test length(membrane(brain)) == LiquidCortex.N
+            pre, post = traces(brain)
+            @test length(pre) == LiquidCortex.N
+            @test length(post) == LiquidCortex.N
+            @test occursin("host-u", diagnostics(brain))
+            @test_throws LiquidCortexValidationError compute_reservoir_covariance(brain)
+            brain = nothing; reclaim_gpu!()
+            brain2 = SparseBrain(20; n_in=8, n_out=4, name="int-tau")
+            @test brain2.tau_m == 20.0f0
+            brain2 = nothing; reclaim_gpu!()
         end
 
         @testset "GPU: SparseBrain custom dims" begin
@@ -426,6 +594,11 @@ end
             @test length(ensemble.lobes) == 4
             @test ensemble.lobes[1].n_in == 8
             @test ensemble.lobes[1].n_out == 4
+            shown = sprint(show, ensemble)
+            @test occursin("EnsembleBrain", shown)
+            @test length(shown) < 400
+            ensemble_step!(ensemble, zeros(Float32, 8); inhibition=0.1f0)
+            @test ensemble.lobes[1].tick_count == 1
             free!(ensemble); reclaim_gpu_hard!()
         end
 
@@ -476,6 +649,11 @@ end
                     ensemble_step!(ensemble, u_act; plasticity=:none, inhibition=0.1f0)
                 end
                 @test all(l.tick_count == 1 + n_steps for l in ensemble.lobes)
+                @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
+                reset!(ensemble)
+                @test all(l.tick_count == 0 for l in ensemble.lobes)
+                @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
+                @test iszero(CUDA.maximum(abs, ensemble.agg_output))
                 @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
 
                 reset!(ensemble)
@@ -533,6 +711,7 @@ end
             finally
                 free!(ensemble)
                 free!(ensemble)  # idempotent
+                ensemble = nothing
                 reclaim_gpu_hard!()
             end
         end
@@ -578,8 +757,8 @@ end
             end
             @test Array(brain.W_out) == W0
             @test brain.tick_count == 40
-            @test_throws LiquidCortex.LiquidCortexValidationError step!(brain, u; plasticity=:typo)
-            @test_throws LiquidCortex.LiquidCortexValidationError step!(
+            @test_throws LiquidCortexValidationError step!(brain, u; plasticity=:typo)
+            @test_throws LiquidCortexValidationError step!(
                 brain, u; plasticity=:recurrent_stdp, recurrent_eta=NaN32)
             free!(brain); reclaim_gpu!()
         end

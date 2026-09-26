@@ -13,7 +13,13 @@ get_output
 get_ensemble_output
 reset!
 free!
+compute_reservoir_covariance
 compute_reservoir_covariance!
+spikes
+membrane
+traces
 diagnostics
 ensemble_diagnostics
+run_lsm_step
+run_lsm_step_str
 ```

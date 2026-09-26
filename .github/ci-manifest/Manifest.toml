@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "0d479a881c9fc63b381ebc9587d6c512d143435d"
+project_hash = "969079cc32ae06307e563511fd9b6ba3638cbc38"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -141,6 +141,13 @@ git-tree-sha1 = "fe749be175f9ea9d0da9eb058799df072285c66f"
 registries = "General"
 uuid = "9e67e8f6-ba02-4b6c-a7db-3b11ae1e7ab7"
 version = "6.4.0"
+
+[[deps.CommonSolve]]
+deps = ["PrecompileTools"]
+git-tree-sha1 = "6c389fa857f6ca5a95474b52a52023fd77f24cb7"
+registries = "General"
+uuid = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
+version = "0.2.14"
 
 [[deps.CompilerCaching]]
 deps = ["LMDB", "SHA", "Scratch"]
@@ -381,7 +388,7 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 version = "1.13.0"
 
 [[deps.LiquidCortex]]
-deps = ["CUDA", "LinearAlgebra", "PrecompileTools", "Printf", "Random", "SparseArrays", "Statistics"]
+deps = ["CUDA", "CommonSolve", "LinearAlgebra", "PrecompileTools", "Printf", "Random", "SparseArrays", "Statistics"]
 path = "."
 uuid = "1f75a0df-502a-4be0-9310-97a9e2e7f166"
 version = "0.2.0"
