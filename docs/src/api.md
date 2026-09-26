@@ -16,5 +16,4 @@ free!
 compute_reservoir_covariance!
 diagnostics
 ensemble_diagnostics
-enable_telemetry!
 ```

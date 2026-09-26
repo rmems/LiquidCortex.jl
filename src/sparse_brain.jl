@@ -497,7 +497,7 @@ function _ensure_edge_indices!(brain::SparseBrain)
     colPtr = Array(brain.W.colPtr)
     rowVal = Array(brain.W.rowVal)
     # CSC invariants (1-based Julia SparseArrays). Failures here are internal
-    # faults and remain Sentry-captured (not LiquidCortexValidationError).
+    # faults (not LiquidCortexValidationError).
     pre, post = _csc_edge_lists(colPtr, rowVal)
     brain.pre_idx = CuArray(pre)
     brain.post_idx = CuArray(post)
@@ -562,7 +562,7 @@ function _advance_lobe_clock!(brain::SparseBrain, upcoming_tick::Int64, record_h
     return nothing
 end
 
-# Internal implementation; public entry point is `step!` (with Sentry capture).
+# Internal implementation; public entry point is `step!`.
 function _step_impl!(brain::SparseBrain, u::CuVector{Float32};
     inhibition::Real=0.0f0,
     reflex_eta::Real=ETA,
@@ -684,8 +684,7 @@ Execute one OU-SDE simulation timestep on a single lobe.
 - `record_history`: write spike history row (default `true`).
 - `use_device_noise`: device `randn!` vs host upload (default `false`).
 
-Runtime exceptions are captured to Sentry (when configured) before rethrow.
-API misuse raises `LiquidCortexValidationError` and is not reported to Sentry.
+API misuse raises `LiquidCortexValidationError`.
 
 # Returns
 - `Nothing`: the lobe is updated in place; read the readout with [`get_output`](@ref)
@@ -708,19 +707,14 @@ function step!(brain::SparseBrain, u::CuVector{Float32};
     sync::Bool=true,
     record_history::Bool=true,
     use_device_noise::Bool=false)
-    try
-        _step_impl!(brain, u;
-            inhibition=inhibition,
-            reflex_eta=reflex_eta,
-            plasticity=plasticity,
-            recurrent_eta=recurrent_eta,
-            sync=sync,
-            record_history=record_history,
-            use_device_noise=use_device_noise)
-    catch exc
-        _capture_runtime_exception(exc, catch_backtrace())
-        rethrow()
-    end
+    _step_impl!(brain, u;
+        inhibition=inhibition,
+        reflex_eta=reflex_eta,
+        plasticity=plasticity,
+        recurrent_eta=recurrent_eta,
+        sync=sync,
+        record_history=record_history,
+        use_device_noise=use_device_noise)
 end
 
 """
@@ -999,7 +993,7 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16)
     EnsembleBrain(lobes, copy(LOBE_NAMES), agg_output, copy(LOBE_WEIGHTS), false)
 end
 
-# Internal implementation; public entry point is `ensemble_step!` (with Sentry capture).
+# Internal implementation; public entry point is `ensemble_step!`.
 function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
     inhibition::Real=0.0f0,
     reflex_eta::Real=ETA,
@@ -1100,7 +1094,6 @@ with weights `[0.4, 0.3, 0.2, 0.1]`.
 Mid-lobe `CUDA.synchronize()` is suppressed; one sync runs after aggregation
 when `sync=true`. Spike-rate host reductions also run only when `sync=true`.
 
-Runtime exceptions are captured to Sentry (when configured) before rethrow.
 If lobe `tick_count`s disagree, or a prior ensemble step failed partway,
 raises [`EnsembleDesynchronizedError`](@ref) before any lobe is stepped.
 A throw after that check poisons the ensemble (`desynchronized=true`) so
@@ -1128,20 +1121,15 @@ function ensemble_step!(eb::EnsembleBrain, u::CuVector{Float32};
     sync::Bool=true,
     record_history::Bool=true,
     use_device_noise::Bool=false)
-    try
-        _ensemble_step_impl!(eb, u;
-            inhibition=inhibition,
-            reflex_eta=reflex_eta,
-            reflex_signal=reflex_signal,
-            plasticity=plasticity,
-            recurrent_eta=recurrent_eta,
-            sync=sync,
-            record_history=record_history,
-            use_device_noise=use_device_noise)
-    catch exc
-        _capture_runtime_exception(exc, catch_backtrace())
-        rethrow()
-    end
+    _ensemble_step_impl!(eb, u;
+        inhibition=inhibition,
+        reflex_eta=reflex_eta,
+        reflex_signal=reflex_signal,
+        plasticity=plasticity,
+        recurrent_eta=recurrent_eta,
+        sync=sync,
+        record_history=record_history,
+        use_device_noise=use_device_noise)
 end
 
 """
