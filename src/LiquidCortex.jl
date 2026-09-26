@@ -53,14 +53,21 @@ Base.showerror(io::IO, e::LiquidCortexValidationError) =
 
 # Fail before any host COO / device allocation. `min_vram_gb` is the
 # documented floor for SparseBrain / EnsembleBrain (≥14 GB).
+_device_memory_gb(bytes::Real) = Float64(bytes) / 1e9
+
+function _vram_meets_floor(device_bytes::Real, min_vram_gb::Real)
+    return _device_memory_gb(device_bytes) >= Float64(min_vram_gb)
+end
+
 function _require_cuda(context::AbstractString; min_vram_gb::Union{Nothing,Real}=nothing)
     extra = min_vram_gb === nothing ? "" : " with ≥$(min_vram_gb) GB VRAM"
     if !_cuda_available[]
         error("$context requires a CUDA GPU$extra. No CUDA device available.")
     end
     min_vram_gb === nothing && return nothing
-    total_gb = CUDA.total_memory() / 1e9
-    total_gb >= Float64(min_vram_gb) && return nothing
+    total_bytes = CUDA.total_memory()
+    _vram_meets_floor(total_bytes, min_vram_gb) && return nothing
+    total_gb = _device_memory_gb(total_bytes)
     error("$context requires a CUDA GPU$extra. This device reports $(round(total_gb; digits=1)) GB.")
 end
 

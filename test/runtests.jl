@@ -182,6 +182,17 @@ end
         @test occursin("fields", err_short.msg)
     end
 
+    @testset "CPU: _require_cuda messaging" begin
+        err = try
+            LiquidCortex._require_cuda("SparseBrain"; min_vram_gb=14)
+        catch e
+            e
+        end
+        @test err isa ErrorException
+        @test occursin("SparseBrain", err.msg)
+        @test occursin("14", err.msg)
+    end
+
     @testset "CPU: CUDA guard fails fast (no COO draw)" begin
         if LiquidCortex._cuda_available[]
             @test_skip "CUDA present — constructor GPU-guard timing covered on CPU CI"
@@ -334,6 +345,12 @@ end
         @test C ≈ Float32[4 4; 4 4]
 
         diag = LiquidCortex._format_diagnostics(1, 10, 0.0123f0, -50.0f0, 1.2345)
+        diag_named = LiquidCortex._format_diagnostics(
+            1, 10, 0.0123f0, -50.0f0, 1.2345; name="lobe-a")
+        @test occursin("[brain:lobe-a]", diag_named)
+        @test LiquidCortex._device_memory_gb(15_000_000_000) ≈ 15.0 rtol=0.01
+        @test LiquidCortex._vram_meets_floor(15_000_000_000, 14)
+        @test !LiquidCortex._vram_meets_floor(10_000_000_000, 14)
         @test occursin("tick=1", diag)
         @test occursin("spikes=10", diag)
         @test occursin("rate=1.23%", diag)
@@ -483,6 +500,17 @@ end
 
     if LiquidCortex._cuda_available[]
         seed_test_rng!(20260915)
+
+        @testset "GPU: _require_cuda VRAM floor" begin
+            @test LiquidCortex._require_cuda("Probe"; min_vram_gb=1) === nothing
+            err_vram = try
+                LiquidCortex._require_cuda("Probe"; min_vram_gb=1e12)
+            catch e
+                e
+            end
+            @test err_vram isa ErrorException
+            @test occursin("GB", err_vram.msg)
+        end
 
         @testset "GPU: SparseBrain default dims" begin
             reclaim_gpu_hard!()
