@@ -183,14 +183,26 @@ end
     end
 
     @testset "CPU: _require_cuda messaging" begin
-        err = try
-            LiquidCortex._require_cuda("SparseBrain"; min_vram_gb=14)
-        catch e
-            e
+        if LiquidCortex._cuda_available[]
+            # GPU runner: device is present; assert the under-VRAM error path.
+            err = try
+                LiquidCortex._require_cuda("SparseBrain"; min_vram_gb=1e12)
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("SparseBrain", err.msg)
+            @test occursin("GB", err.msg)
+        else
+            err = try
+                LiquidCortex._require_cuda("SparseBrain"; min_vram_gb=14)
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("SparseBrain", err.msg)
+            @test occursin("14", err.msg)
         end
-        @test err isa ErrorException
-        @test occursin("SparseBrain", err.msg)
-        @test occursin("14", err.msg)
     end
 
     @testset "CPU: CUDA guard fails fast (no COO draw)" begin
