@@ -981,6 +981,16 @@ partially mutating the ensemble, so aggregated output would mix simulated times.
 
 Raised by [`ensemble_step!`](@ref) and [`get_ensemble_output`](@ref).
 GPU neuron state is not rolled back; the ensemble is unusable until discarded.
+
+# Classification
+
+This is a **caller-handled** exception: callers are expected to catch it (e.g.
+with `@test_throws` in tests, or a `try/catch` in application code). It does
+**not** indicate an internal library fault. Any telemetry or error-capture
+layer wrapping `ensemble_step!` should exclude this type (alongside
+`LiquidCortexValidationError`) from automatic capture — the most reliable
+guard is to check `eb.desynchronized` *before* the call rather than
+intercepting the throw.
 """
 struct EnsembleDesynchronizedError <: Exception
     msg::String
