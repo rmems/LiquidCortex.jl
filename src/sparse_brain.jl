@@ -988,9 +988,15 @@ This is a **caller-handled** exception: callers are expected to catch it (e.g.
 with `@test_throws` in tests, or a `try/catch` in application code). It does
 **not** indicate an internal library fault. Any telemetry or error-capture
 layer wrapping `ensemble_step!` should exclude this type (alongside
-`LiquidCortexValidationError`) from automatic capture — the most reliable
-guard is to check `eb.desynchronized` *before* the call rather than
-intercepting the throw.
+`LiquidCortexValidationError`) from automatic capture.
+
+Note: checking `eb.desynchronized` alone is not a sufficient pre-call guard.
+The exception is raised on two distinct paths — a poisoned ensemble
+(`desynchronized == true`) *and* a clock mismatch between lobes
+(`desynchronized` may still be `false`). Callers wishing to avoid the throw
+must check both conditions: `eb.desynchronized` and that all lobe
+`tick_count`s agree. The simplest and most reliable approach is to catch the
+exported exception directly.
 """
 struct EnsembleDesynchronizedError <: Exception
     msg::String
