@@ -179,7 +179,8 @@ end
 
 function _weighted_sum!(agg, weights, outputs)
     n = length(outputs)
-    length(weights) == n || throw(BoundsError(weights, n))
+    length(weights) == n || throw(LiquidCortexValidationError(
+        "weights length $(length(weights)) does not match output count $n"))
     fill!(agg, zero(eltype(agg)))
     for (w, y) in zip(weights, outputs)
         agg .+= w .* y
@@ -1131,6 +1132,8 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
     # Validate once before any STDP edge prewarm (avoids large allocs on bad kwargs).
     isempty(eb.lobes) || _validate_step_kwargs!(eb.lobes[1], u;
         plasticity=plasticity, recurrent_eta=recurrent_eta)
+    length(eb.weights) == length(eb.lobes) || throw(LiquidCortexValidationError(
+        "weights length $(length(eb.weights)) does not match lobe count $(length(eb.lobes))"))
     _assert_ensemble_synchronized!(eb)
 
     prev_agg = copy(eb.agg_output)
