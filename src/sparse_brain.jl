@@ -1132,12 +1132,16 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
     # Validate once before any STDP edge prewarm (avoids large allocs on bad kwargs).
     isempty(eb.lobes) || _validate_step_kwargs!(eb.lobes[1], u;
         plasticity=plasticity, recurrent_eta=recurrent_eta)
-    length(eb.weights) == length(eb.lobes) || throw(LiquidCortexValidationError(
-        "weights length $(length(eb.weights)) does not match lobe count $(length(eb.lobes))"))
     _assert_ensemble_synchronized!(eb)
 
     prev_agg = copy(eb.agg_output)
     try
+        # Validate weights length inside the try block so a mismatch poisons the
+        # ensemble (desynchronized=true) via the catch below, matching the contract
+        # that any failed ensemble_step! leaves the ensemble unusable.
+        length(eb.weights) == length(eb.lobes) || throw(LiquidCortexValidationError(
+            "weights length $(length(eb.weights)) does not match lobe count $(length(eb.lobes))"))
+
         # Prewarm STDP edge lists before the async lobe loop so the first
         # :recurrent_stdp ensemble step does not host-sync mid-loop per lobe.
         if plasticity === :recurrent_stdp && Float32(recurrent_eta) != 0.0f0
