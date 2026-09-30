@@ -13,5 +13,7 @@ coverage:
         threshold: 5%
     patch:
       default:
-        target: auto
+        # GPU-only paths in `src/` are covered on the self-hosted runner (`julia-gpu`);
+        # merged patch % stays below project `auto` (~94%) for CUDA-heavy PRs.
+        target: 80%
         threshold: 5%

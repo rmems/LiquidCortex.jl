@@ -39,10 +39,11 @@ Pkg.add(url="https://github.com/rmems/LiquidCortex.jl")
 using LiquidCortex, CUDA, Random
 
 # Create a 65,536-neuron sparse LSM lobe
-brain = SparseBrain(20.0f0)  # τ_m = 20ms, default n_in=14, n_out=16
+# tau_m accepts Float64 / Int: SparseBrain(20.0) and SparseBrain(20) both work
+brain = SparseBrain(20.0)  # τ_m = 20ms, default n_in=14, n_out=16
 
 # Or with custom dimensions:
-#   brain = SparseBrain(20.0f0; n_in=8, n_out=4)
+#   brain = SparseBrain(20.0; n_in=8, n_out=4)
 
 # Or a small, seeded reservoir for sweeps / tests:
 #   cfg = BrainConfig(N=256, spectral_radius=0.8f0, rng=Random.Xoshiro(42))
@@ -51,30 +52,41 @@ brain = SparseBrain(20.0f0)  # τ_m = 20ms, default n_in=14, n_out=16
 # Or create the full 4-lobe ensemble (262,144 neurons)
 ensemble = EnsembleBrain()
 
-# Step the reservoir with an input vector — length(u) must equal brain.n_in
-u = CUDA.zeros(Float32, 14)
+# Step with a host or device vector — length(u) must equal brain.n_in
+u = zeros(Float32, 14)
 step!(brain, u; inhibition=0.3f0)
 
 # Read the output
 output = get_output(brain)
 ```
 
+`using LiquidCortex` succeeds on CPU-only machines. Constructing `SparseBrain`
+or `EnsembleBrain`, or calling `run_lsm_step`, fails immediately with a CUDA /
+VRAM message (no ~40 s host COO draw). Default `N=65_536` asks for ≥14 GB VRAM;
+smaller reservoirs pass `BrainConfig(N=...)`. The 2,048-neuron reference LSM
+remains the dense small-scale path.
+
 ## Public API
 
 | Type / Function | Description |
 |-----------------|-------------|
 | `BrainConfig(; N, conn_prob, spectral_radius, rng, ...)` | Reservoir hyperparameters (defaults match module constants) |
-| `SparseBrain(tau_m; cfg, n_in, n_out)` | Create a sparse reservoir lobe (default `N=65_536`) |
-| `EnsembleBrain(; n_in, n_out, cfg, taus, weights)` | Create a multi-lobe ensemble (default 4 × 65,536) |
-| `step!(brain, u; inhibition, reflex_eta, ...)` | Execute one simulation timestep (see experimental kwargs) |
+| `SparseBrain(tau_m; cfg, n_in, n_out, name)` | Sparse reservoir lobe (`tau_m::Real`, default `N=65_536`) |
+| `EnsembleBrain(; n_in, n_out, cfg, taus, weights)` | Multi-lobe ensemble (default 4 × 65,536) |
+| `step!(brain, u; inhibition, reflex_eta, ...)` | One timestep (`CommonSolve.step!`; host vector or `CuVector`) |
 | `ensemble_step!(eb, u; inhibition, reflex_eta, reflex_signal, ...)` | Step all lobes and aggregate |
 | `get_output(brain)` | Copy readout from GPU to CPU |
 | `get_ensemble_output(eb)` | Copy aggregated readout |
-| `reset!(brain; keep_weights=true)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
-| `free!(brain)` / `free!(eb)` | Release GPU buffers into the CUDA.jl pool |
+| `spikes(brain)` / `membrane(brain)` / `traces(brain)` | Host copies of spike state, `V`, eligibility traces |
+| `compute_reservoir_covariance(brain)` | Subsampled covariance (throws until history is full; `!` is a read-only alias) |
 | `compute_reservoir_covariance!(brain)` | Compute subsampled covariance matrix |
 | `diagnostics(brain)` | Return diagnostic string |
 | `ensemble_diagnostics(eb)` | Per-lobe diagnostic summary |
+| `run_lsm_step(u, inhibit)` | Step the 2,048-neuron dense reference LSM (host `Vector{Float32}`) |
+| `LiquidCortexValidationError` | Thrown on API misuse (`step!` kwargs / input size) |
+| `ETA` / `MAX_INHIBITION` | Default `reflex_eta` (`0.001`) and inhibition clamp (`3`) |
+| `reset!(brain)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |
+| `free!(brain)` / `free!(eb)` | Release GPU buffers into the CUDA.jl pool |
 | `EnsembleDesynchronizedError` | Raised when lobe clocks disagree or a prior ensemble step failed |
 
 ## Experimental step API

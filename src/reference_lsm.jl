@@ -34,8 +34,8 @@ const _ref_initialized = Ref{Bool}(false)
 Allocate the 2,048-neuron reference LSM reservoir on GPU.
 
 Call this **manually** when you need to pin `n_in` / `n_out` before the first
-step, or to pre-allocate so the first [`run_lsm_step`](@ref) is not the
-allocation. Otherwise the first `run_lsm_step` / [`run_lsm_step_str`](@ref)
+step, or to pre-allocate so the first `run_lsm_step` is not the
+allocation. Otherwise the first `run_lsm_step` / `run_lsm_step_str`
 initializes lazily from `length(inputs_vec)` and the `n_out` keyword.
 
 Re-calling after the reservoir is already initialized overwrites the global
@@ -61,6 +61,7 @@ length(y) == 4
 function _init_ref_lsm!(; n_in::Int=REF_IN_DEFAULT, n_out::Int=REF_OUT_DEFAULT)
     n_in > 0 || throw(ArgumentError("n_in must be positive, got $n_in"))
     n_out > 0 || throw(ArgumentError("n_out must be positive, got $n_out"))
+    _require_cuda("Reference LSM")
     _ref_W[] = cpu_randn_cu(REF_N, REF_N) .* 0.02f0
     _ref_Win[] = cpu_randn_cu(REF_N, n_in) .* 0.5f0
     _ref_Wout[] = cpu_randn_cu(n_out, REF_N) .* 0.1f0
@@ -90,7 +91,7 @@ Later calls require `length(inputs_vec) == _ref_n_in[]` or they throw
 
 # Keyword Arguments
 - `n_out::Int=16`: readout size used **only** on first-call lazy init.
-  Ignored once the reservoir exists — call [`_init_ref_lsm!`](@ref) first
+  Ignored once the reservoir exists — call `LiquidCortex._init_ref_lsm!` first
   to set both dims explicitly.
 
 # Returns
@@ -111,8 +112,7 @@ function run_lsm_step(inputs_vec::Vector{Float32}, inhibit_val::Float32;
     n_out::Int=REF_OUT_DEFAULT)
     # Lazy initialization on first call
     if !_ref_is_initialized()
-        LiquidCortex._cuda_available[] || error(
-            "Reference LSM requires a CUDA GPU. No CUDA device available.")
+        _require_cuda("Reference LSM")
         _init_ref_lsm!(; n_in=length(inputs_vec), n_out=n_out)
     end
 

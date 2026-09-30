@@ -427,9 +427,10 @@ function _spike_history_covariance(X, hist_depth::Integer)
 end
 
 function _format_diagnostics(tick_count, total_spikes, last_spike_rate,
-                             v_thresh_dynamic, w_out_norm)
+                             v_thresh_dynamic, w_out_norm; name::String="")
+    label = isempty(name) ? "[brain]" : "[brain:$name]"
     return string(
-        "[brain] tick=", tick_count,
+        label, " tick=", tick_count,
         " spikes=", total_spikes,
         " rate=", round(last_spike_rate * 100, digits=2), "%",
         " V_thresh=", round(v_thresh_dynamic, digits=1),
@@ -477,10 +478,13 @@ A sparse CUDA reservoir lobe with OU-SDE membrane dynamics,
 STDP-capable recurrent weights, and a dense readout.
 
 Requires a CUDA GPU. Construct with
-`SparseBrain(tau_m; cfg=BrainConfig(), n_in, n_out, name)`.
-Default `cfg.N` is 65,536. Reuse a lobe across trials with [`reset!`](@ref);
-release device memory with [`free!`](@ref). CuArray finalizers run if the
-caller never calls `free!`.
+`SparseBrain(tau_m; cfg=BrainConfig(), n_in, n_out, name)` — `tau_m` accepts
+any `Real` and is stored as `Float32`. Default `cfg.N` is 65,536 and needs
+≥14 GB VRAM; a smaller `cfg.N` skips that floor. Constructing on a CPU-only
+host fails immediately, before the recurrent COO draw. Reuse a lobe across
+trials with [`reset!`](@ref); release device memory (including the host-`step!`
+input buffer) with [`free!`](@ref). CuArray finalizers run if the caller never
+calls `free!`.
 
 # Fields
 - `W::CuSparseMatrixCSC{Float16,Int32}`: sparse recurrent weights
@@ -510,14 +514,16 @@ caller never calls `free!`.
 - `tick_count::Int64`: completed timesteps
 - `total_spikes::Int64`: cumulative spike count (committed with the tick when `sync=true`)
 - `last_spike_rate::Float32`: last-tick spike fraction (committed with the tick when `sync=true`)
+- `name::String`: constructor label (used by `diagnostics` / `show`)
+- `u_buf::CuVector{Float32}`: preallocated input buffer for host-vector `step!`
 
 # Examples
 ```julia
 using LiquidCortex, CUDA, Random
-brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="demo")
+brain = SparseBrain(20.0; n_in=8, n_out=4, name="demo")
 cfg = BrainConfig(N=256, rng=Random.Xoshiro(1))
 small = SparseBrain(20.0f0; cfg=cfg, n_in=8, n_out=4)
-u = CUDA.zeros(Float32, 8)
+u = zeros(Float32, 8)
 step!(brain, u; inhibition=0.3f0)
 y = get_output(brain)
 ```
@@ -575,6 +581,19 @@ mutable struct SparseBrain
     tick_count::Int64
     total_spikes::Int64
     last_spike_rate::Float32
+    name::String
+    u_buf::CuVector{Float32}
+
+    # Hide the auto-generated all-fields positional constructor (it otherwise
+    # dominates MethodError "closest candidates" with an unreadable wall).
+    # `new(args...)` would otherwise accept a prefix and leave later fields
+    # undefined (`SparseBrain(Val(:new))` must not succeed).
+    function SparseBrain(::Val{:new}, args...)
+        n = fieldcount(SparseBrain)
+        length(args) == n || throw(ArgumentError(
+            "internal SparseBrain constructor expected $n fields, got $(length(args))"))
+        return new(args...)
+    end
 end
 
 function _validate_lobe_dims(n_in::Int, n_out::Int)
@@ -602,8 +621,8 @@ Weight initialization:
     (Breaks zero-readout deadlock — reservoir produces signals from tick 1)
 
 # Arguments
-- `tau_m::Float32`: membrane time constant in milliseconds (must be
-  positive and finite). All of `0`, negatives, `NaN`, and `Inf` are
+- `tau_m::Real`: membrane time constant in milliseconds, stored as `Float32`
+  (must be positive and finite). All of `0`, negatives, `NaN`, and `Inf` are
   rejected. `V` starts at `cfg.v_rest`, so the first membrane term is
   `0 / tau_m`; only `0` and `NaN` make that term `NaN`.
 
@@ -612,7 +631,7 @@ Weight initialization:
   parameters, and RNG. Defaults match the module constants (`N=65_536`, …).
 - `n_in::Int=14`: input dimension (must be positive)
 - `n_out::Int=16`: readout dimension (must be positive)
-- `name::String="default"`: label used in constructor progress logs
+- `name::AbstractString="default"`: stored label used in `diagnostics` / `show`
 
 Prefer [`free!`](@ref) when peak VRAM matters; CuArray finalizers are the
 GC fallback and must not be used as a substitute for `free!` after
@@ -624,17 +643,21 @@ GC fallback and must not be used as a substitute for `free!` after
 # Examples
 ```julia
 using LiquidCortex, CUDA, Random
-brain = SparseBrain(20.0f0)                      # defaults: n_in=14, n_out=16
-brain = SparseBrain(25.0f0; n_in=8, n_out=4, name="custom")
+brain = SparseBrain(20.0)                       # Float64 / Int accepted
+brain = SparseBrain(25; n_in=8, n_out=4, name="custom")
 small = SparseBrain(20.0f0; cfg=BrainConfig(N=256, rng=Random.Xoshiro(1)))
-u = CUDA.zeros(Float32, brain.n_in)
-step!(brain, u; inhibition=0.5f0)
+step!(brain, zeros(Float32, brain.n_in); inhibition=0.5f0)
 ```
 """
-function SparseBrain(tau_m::Float32; cfg::BrainConfig=BrainConfig(),
-    n_in::Int=14, n_out::Int=16, name::String="default")
+function SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(),
+    n_in::Int=14, n_out::Int=16, name::AbstractString="default")
+    tau_m = Float32(tau_m)
     _validate_lobe_dims(n_in, n_out)
     _validate_tau_m(tau_m)
+    # 14 GB is the floor for the default 65,536-neuron lobe. Smaller cfg.N
+    # still requires a CUDA device, but not that card size.
+    _require_cuda("SparseBrain"; min_vram_gb=cfg.N == N ? 14 : nothing)
+    name = String(name)
     n = cfg.N
     @debug "[brain:$name] Initializing $(n)-neuron lobe (τ_m=$(tau_m)ms, in=$(n_in), out=$(n_out))..."
 
@@ -681,8 +704,9 @@ function SparseBrain(tau_m::Float32; cfg::BrainConfig=BrainConfig(),
     trace_pre = CUDA.zeros(Float32, n)
     trace_post = CUDA.zeros(Float32, n)
 
-    # ── 6. Output ────────────────────────────────────────────────────────────
+    # ── 6. Output + host-input scratch ───────────────────────────────────────
     output = CUDA.zeros(Float32, n_out)
+    u_buf = CUDA.zeros(Float32, n_in)
 
     # ── 7. Rolling spike history for deep temporal covariance (on GPU) ───────
     history = CUDA.zeros(Float32, cfg.hist_depth, n)
@@ -691,7 +715,7 @@ function SparseBrain(tau_m::Float32; cfg::BrainConfig=BrainConfig(),
     CUDA.synchronize()
     @debug "[brain:$name] ✓ Lobe initialized (τ_m=$(tau_m)ms)"
 
-    SparseBrain(
+    SparseBrain(Val(:new),
         W_gpu, pre_idx, post_idx, edge_nnz,
         W_in, W_out,
         V, S, refrac,
@@ -703,8 +727,8 @@ function SparseBrain(tau_m::Float32; cfg::BrainConfig=BrainConfig(),
         cfg,
         history, 1, false,
         Float32(cfg.v_thresh),
-        0, 0, 0.0f0
-    )
+        0, 0, 0.0f0,
+        name, u_buf)
 end
 
 const PLASTICITY_MODES = (:readout_only, :recurrent_stdp, :none)
@@ -789,6 +813,20 @@ function _validate_step_kwargs!(brain::SparseBrain, u::AbstractVector;
         "input has length $(length(u)), expected $(brain.n_in)"))
     _validate_plasticity_kwargs(; plasticity=plasticity, recurrent_eta=recurrent_eta)
     return nothing
+end
+
+"""Copy `u` into the preallocated `dest` buffer (no per-tick `cu(u)` alloc)."""
+function _upload_input!(dest::CuVector{Float32}, u::AbstractVector)
+    length(u) == length(dest) || throw(LiquidCortexValidationError(
+        "input has length $(length(u)), expected $(length(dest))"))
+    if u isa CuArray
+        dest .= Float32.(u)
+    elseif eltype(u) === Float32
+        copyto!(dest, u)
+    else
+        copyto!(dest, convert(Vector{Float32}, u))
+    end
+    return dest
 end
 
 """Queue a history row. Host `hist_idx` / `tick_count` stay unchanged until `_advance_lobe_clock!`."""
@@ -908,15 +946,20 @@ end
 
 Execute one OU-SDE simulation timestep on a single lobe.
 
+This is a `CommonSolve.step!` method, so `using DifferentialEquations, LiquidCortex`
+does not produce a `step!` name collision.
+
 # Arguments
 - `brain::SparseBrain`: reservoir lobe (mutated in place)
-- `u::CuVector{Float32}`: input current; `length(u)` must equal `brain.n_in`
+- `u`: input current; `length(u)` must equal `brain.n_in`. `CuVector{Float32}`
+  is used as-is. Any other `AbstractVector` is copied into the preallocated
+  `brain.u_buf` (host `Vector{Float32}` / `CuVector{Float64}` / etc.).
 
 # Keyword Arguments
 - `inhibition`: global inhibition level (default `0.0`, clamped to
   `[0, brain.cfg.max_inhibition]`). Raises the spike threshold by
   `inhibition * brain.cfg.inhibition_gain` mV.
-- `reflex_eta`: Hebbian learning rate for `W_out` (default `ETA`).
+- `reflex_eta`: Hebbian learning rate for `W_out` (default `ETA` = $(ETA)).
 - `plasticity`: one of `:readout_only` (default; frozen `W` plus Hebbian `W_out`
   every 10 ticks), `:recurrent_stdp` (pair STDP every tick on sparse `W`
   nonzeros plus readout Hebbian), or `:none` (no weight updates).
@@ -937,8 +980,8 @@ API misuse raises `LiquidCortexValidationError`.
 # Examples
 ```julia
 using LiquidCortex, CUDA
-brain = SparseBrain(20.0f0; n_in=8, n_out=4)
-u = CUDA.zeros(Float32, 8)
+brain = SparseBrain(20.0; n_in=8, n_out=4)
+u = zeros(Float32, 8)
 step!(brain, u; inhibition=0.5f0)          # raise threshold (quieter lobe)
 step!(brain, u; plasticity=:none)          # freeze all weights
 y = get_output(brain)                      # Vector{Float32} of length 4
@@ -962,6 +1005,25 @@ function step!(brain::SparseBrain, u::CuVector{Float32};
         use_device_noise=use_device_noise)
 end
 
+function step!(brain::SparseBrain, u::AbstractVector;
+    inhibition::Real=0.0f0,
+    reflex_eta::Real=ETA,
+    plasticity::Symbol=:readout_only,
+    recurrent_eta::Real=1.0f-4,
+    sync::Bool=true,
+    record_history::Bool=true,
+    use_device_noise::Bool=false)
+    _upload_input!(brain.u_buf, u)
+    return step!(brain, brain.u_buf;
+        inhibition=inhibition,
+        reflex_eta=reflex_eta,
+        plasticity=plasticity,
+        recurrent_eta=recurrent_eta,
+        sync=sync,
+        record_history=record_history,
+        use_device_noise=use_device_noise)
+end
+
 """
     get_output(brain::SparseBrain) -> Vector{Float32}
 
@@ -976,14 +1038,52 @@ Copy the lobe readout from GPU to CPU.
 # Examples
 ```julia
 using LiquidCortex, CUDA
-brain = SparseBrain(20.0f0; n_in=8, n_out=4)
-step!(brain, CUDA.zeros(Float32, 8); inhibition=0.2f0)
+brain = SparseBrain(20.0; n_in=8, n_out=4)
+step!(brain, zeros(Float32, 8); inhibition=0.2f0)
 y = get_output(brain)
 length(y) == 4
 ```
 """
 function get_output(brain::SparseBrain)
     return Array(brain.output)
+end
+
+"""
+    spikes(brain::SparseBrain) -> Vector{Float32}
+
+Host copy of the current spike state (`0` or `1` per neuron).
+"""
+spikes(brain::SparseBrain) = Array(brain.S)
+
+"""
+    membrane(brain::SparseBrain) -> Vector{Float32}
+
+Host copy of membrane potentials in mV.
+"""
+membrane(brain::SparseBrain) = Array(brain.V)
+
+"""
+    traces(brain::SparseBrain) -> Tuple{Vector{Float32},Vector{Float32}}
+
+Host copies of `(trace_pre, trace_post)` eligibility traces.
+"""
+traces(brain::SparseBrain) = (Array(brain.trace_pre), Array(brain.trace_post))
+
+function Base.show(io::IO, brain::SparseBrain)
+    print(io, "SparseBrain(\"", brain.name, "\", τ_m=", brain.tau_m,
+          " ms, n_in=", brain.n_in, ", n_out=", brain.n_out,
+          ", ticks=", brain.tick_count, ", nnz=", brain.nnz, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", brain::SparseBrain)
+    println(io, "SparseBrain \"", brain.name, "\"")
+    println(io, "  τ_m: ", brain.tau_m, " ms")
+    println(io, "  n_in: ", brain.n_in, ", n_out: ", brain.n_out)
+    println(io, "  neurons: ", N, ", recurrent nnz: ", brain.nnz)
+    println(io, "  ticks: ", brain.tick_count,
+            ", hist_full: ", brain.hist_full)
+    print(io, "  last spike rate: ",
+          round(brain.last_spike_rate * 100, digits=2), "%")
 end
 
 """
@@ -995,23 +1095,23 @@ Return a one-line diagnostic string with current lobe state.
 - `brain::SparseBrain`: lobe to summarize
 
 # Returns
-- `String`: tick count, cumulative spikes, last spike rate, dynamic
+- `String`: name, tick count, cumulative spikes, last spike rate, dynamic
   threshold, and `W_out` Frobenius norm. Spike totals/rates are only
   refreshed when the last [`step!`](@ref) used `sync=true`.
 
 # Examples
 ```julia
 using LiquidCortex, CUDA
-brain = SparseBrain(20.0f0; n_in=8, n_out=4)
-step!(brain, CUDA.zeros(Float32, 8))
+brain = SparseBrain(20.0; n_in=8, n_out=4, name="demo")
+step!(brain, zeros(Float32, 8))
 println(diagnostics(brain))
-# [brain] tick=1 spikes=… rate=…% V_thresh=-50.0 W_out_norm=…
+# [brain:demo] tick=1 spikes=… rate=…% V_thresh=-50.0 W_out_norm=…
 ```
 """
 function diagnostics(brain::SparseBrain)
     return _format_diagnostics(
         brain.tick_count, brain.total_spikes, brain.last_spike_rate,
-        brain.v_thresh_dynamic, norm(brain.W_out))
+        brain.v_thresh_dynamic, norm(brain.W_out); name=brain.name)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1019,46 +1119,48 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    compute_reservoir_covariance!(brain::SparseBrain) -> Union{Tuple{CuMatrix,Vector{Int}}, Nothing}
+    compute_reservoir_covariance(brain::SparseBrain) -> Tuple{CuMatrix{Float32},Vector{Int}}
 
 Compute a subsampled covariance matrix of reservoir spike history.
 Subsamples `brain.cfg.cov_subsample` neurons (clamped to `cfg.N` at
 config construction) so the full N×N matrix is never materialized.
 
+Default `cov_subsample` is 8192 (8192² × 4 bytes ≈ 268 MB).
+
 Uses the brain's internal rolling history buffer
 (`cfg.hist_depth × cfg.N`). Neuron indices are drawn from `cfg.rng`.
-Returns `nothing` until the circular history has wrapped at least once
-(`brain.hist_full`).
+Throws [`LiquidCortexValidationError`](@ref) until the circular history has
+wrapped at least once (`brain.hist_full`). This is a **read-only** operation;
+`compute_reservoir_covariance!` is a compatibility alias and does not mutate
+`brain`.
 
 # Arguments
 - `brain::SparseBrain`: lobe with a filled history buffer
 
 # Returns
-- `nothing` if `brain.hist_full == false`
-- `(C, indices)` otherwise, where `C::CuMatrix{Float32}` is
-  `k × k` (`k = cfg.cov_subsample`) and `indices::Vector{Int}` are the
-  subsampled neuron ids
+- `(C, indices)` where `C::CuMatrix{Float32}` is `k × k`
+  (`k = cfg.cov_subsample`) and `indices::Vector{Int}` are the subsampled
+  neuron ids
 
 # Examples
 ```julia
 using LiquidCortex, CUDA, Random
 cfg = BrainConfig(N=256, hist_depth=16, rng=Random.Xoshiro(1))
-brain = SparseBrain(20.0f0; cfg=cfg, n_in=8, n_out=4)
-u = CUDA.zeros(Float32, 8)
+brain = SparseBrain(20.0; cfg=cfg, n_in=8, n_out=4)
+u = zeros(Float32, 8)
 for _ in 1:16
     step!(brain, u; inhibition=0.1f0)
 end
-result = compute_reservoir_covariance!(brain)
-C, indices = result                      # after hist_full
+C, indices = compute_reservoir_covariance(brain)  # cov_subsample clamped to N
 size(C) == (256, 256)
 ```
 """
-function compute_reservoir_covariance!(brain::SparseBrain)
-    if !brain.hist_full
-        return nothing
-    end
-
+function compute_reservoir_covariance(brain::SparseBrain)
     cfg = brain.cfg
+    brain.hist_full || throw(LiquidCortexValidationError(
+        "compute_reservoir_covariance needs a full rolling history " *
+        "($(cfg.hist_depth) ticks with record_history=true); " *
+        "got tick_count=$(brain.tick_count), hist_full=false"))
     # Subsample (clamped so N < cov_subsample does not BoundsError).
     indices = _cov_subsample_indices(cfg.N, cfg.cov_subsample, cfg.rng)
     X = brain.history[:, indices]  # hist_depth × k on GPU
@@ -1069,6 +1171,8 @@ function compute_reservoir_covariance!(brain::SparseBrain)
     CUDA.synchronize()
     return (C, indices)
 end
+
+const compute_reservoir_covariance! = compute_reservoir_covariance
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EnsembleBrain: 4-Lobe Parallel Architecture
@@ -1194,6 +1298,21 @@ function _commit_ensemble_aggregate!(eb::EnsembleBrain)
     return nothing
 end
 
+function Base.show(io::IO, eb::EnsembleBrain)
+    n_in = isempty(eb.lobes) ? 0 : eb.lobes[1].n_in
+    n_out = length(eb.agg_output)
+    print(io, "EnsembleBrain(n_in=", n_in, ", n_out=", n_out,
+          ", lobes=", length(eb.lobes), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", eb::EnsembleBrain)
+    n_in = isempty(eb.lobes) ? 0 : eb.lobes[1].n_in
+    println(io, "EnsembleBrain")
+    println(io, "  lobes: ", length(eb.lobes), " (", join(eb.lobe_names, ", "), ")")
+    println(io, "  n_in: ", n_in, ", n_out: ", length(eb.agg_output))
+    print(io, "  weights: ", eb.weights)
+end
+
 """
     EnsembleBrain(; n_in=14, n_out=16, cfg=BrainConfig(),
                   taus=LOBE_TAUS, weights=LOBE_WEIGHTS, names=nothing) -> EnsembleBrain
@@ -1271,6 +1390,7 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16,
     n_lobes, tau32 = _validate_ensemble_spec(taus, weights, names)
     lobe_names = _ensemble_lobe_names(n_lobes, names)
     w = Float32[Float32(x) for x in weights]
+    _require_cuda("EnsembleBrain"; min_vram_gb=cfg.N == N ? 14 : nothing)
     @debug "[ensemble] Initializing $(n_lobes) lobes × $(cfg.N) = $(n_lobes * cfg.N) neurons"
 
     lobes = SparseBrain[]
@@ -1382,7 +1502,8 @@ with `eb.weights`.
 # Arguments
 - `eb::EnsembleBrain`: ensemble (mutated in place)
 - `u::CuVector{Float32}`: input shared by every lobe; `length(u)` must
-  equal each lobe's `n_in`
+  equal each lobe's `n_in`. Other `AbstractVector`s are uploaded into lobe 1's
+  `u_buf`.
 
 # Keyword Arguments
 - `inhibition`, `reflex_eta`, `plasticity`, `recurrent_eta`, `sync`,
@@ -1422,6 +1543,29 @@ function ensemble_step!(eb::EnsembleBrain, u::CuVector{Float32};
     record_history::Bool=true,
     use_device_noise::Bool=false)
     _ensemble_step_impl!(eb, u;
+        inhibition=inhibition,
+        reflex_eta=reflex_eta,
+        reflex_signal=reflex_signal,
+        plasticity=plasticity,
+        recurrent_eta=recurrent_eta,
+        sync=sync,
+        record_history=record_history,
+        use_device_noise=use_device_noise)
+end
+
+function ensemble_step!(eb::EnsembleBrain, u::AbstractVector;
+    inhibition::Real=0.0f0,
+    reflex_eta::Real=ETA,
+    reflex_signal::Real=0.0f0,
+    plasticity::Symbol=:readout_only,
+    recurrent_eta::Real=1.0f-4,
+    sync::Bool=true,
+    record_history::Bool=true,
+    use_device_noise::Bool=false)
+    isempty(eb.lobes) && throw(LiquidCortexValidationError("EnsembleBrain has no lobes"))
+    buf = eb.lobes[1].u_buf
+    _upload_input!(buf, u)
+    return ensemble_step!(eb, buf;
         inhibition=inhibition,
         reflex_eta=reflex_eta,
         reflex_signal=reflex_signal,
@@ -1555,6 +1699,27 @@ step!(ensemble, CUDA.zeros(Float32, 8); inhibition=0.3f0, reflex_signal=0.0)
 ```
 """
 function step!(eb::EnsembleBrain, u::CuVector{Float32};
+    inhibition::Real=0.0f0,
+    reflex_eta::Real=ETA,
+    reflex_signal::Real=0.0f0,
+    plasticity::Symbol=:readout_only,
+    recurrent_eta::Real=1.0f-4,
+    sync::Bool=true,
+    record_history::Bool=true,
+    use_device_noise::Bool=false)
+    ensemble_step!(eb, u;
+        inhibition=inhibition,
+        reflex_eta=reflex_eta,
+        reflex_signal=reflex_signal,
+        plasticity=plasticity,
+        recurrent_eta=recurrent_eta,
+        sync=sync,
+        record_history=record_history,
+        use_device_noise=use_device_noise)
+    return nothing
+end
+
+function step!(eb::EnsembleBrain, u::AbstractVector;
     inhibition::Real=0.0f0,
     reflex_eta::Real=ETA,
     reflex_signal::Real=0.0f0,
