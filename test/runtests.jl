@@ -703,6 +703,9 @@ end
             @test size(brain.W_in, 2) == 8
             @test hasproperty(brain, :cfg)
             @test brain.cfg.N == 128
+            plain = sprint(show, MIME"text/plain"(), brain)
+            @test occursin("neurons: 128", plain)
+            @test !occursin("neurons: $(LiquidCortex.N)", plain)
             free!(brain); reclaim_gpu!()
         end
 

@@ -47,7 +47,16 @@ function __init__()
     end
 end
 
-# Caller-facing validation (wrong kwargs / input size).
+"""
+    LiquidCortexValidationError <: Exception
+
+Caller-facing validation failure: bad `step!` kwargs, an input whose length
+does not match `n_in`, or a covariance request before the history buffer
+has wrapped.
+
+# Fields
+- `msg::String`: explanation shown by `showerror`
+"""
 struct LiquidCortexValidationError <: Exception
     msg::String
 end

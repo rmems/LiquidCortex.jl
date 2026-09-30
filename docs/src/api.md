@@ -8,6 +8,7 @@ BrainConfig
 SparseBrain
 EnsembleBrain
 EnsembleDesynchronizedError
+LiquidCortexValidationError
 step!
 ensemble_step!
 get_output

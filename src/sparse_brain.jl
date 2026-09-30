@@ -1079,7 +1079,7 @@ function Base.show(io::IO, ::MIME"text/plain", brain::SparseBrain)
     println(io, "SparseBrain \"", brain.name, "\"")
     println(io, "  τ_m: ", brain.tau_m, " ms")
     println(io, "  n_in: ", brain.n_in, ", n_out: ", brain.n_out)
-    println(io, "  neurons: ", N, ", recurrent nnz: ", brain.nnz)
+    println(io, "  neurons: ", brain.cfg.N, ", recurrent nnz: ", brain.nnz)
     println(io, "  ticks: ", brain.tick_count,
             ", hist_full: ", brain.hist_full)
     print(io, "  last spike rate: ",
