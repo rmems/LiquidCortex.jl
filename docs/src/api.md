@@ -4,9 +4,11 @@ Docstrings for every exported name. Examples allocate CUDA reservoirs and
 are not executed as doctests on CPU CI.
 
 ```@docs
+BrainConfig
 SparseBrain
 EnsembleBrain
 EnsembleDesynchronizedError
+LiquidCortexValidationError
 step!
 ensemble_step!
 get_output
