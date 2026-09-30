@@ -164,6 +164,8 @@ function _validate_brain_config(
     isfinite(v_reset) || throw(ArgumentError("v_reset must be finite, got $v_reset"))
     (isfinite(sigma) && sigma >= 0) || throw(ArgumentError(
         "sigma must be finite and ≥ 0, got $sigma"))
+    isfinite(sigma * sqrt(dt)) || throw(ArgumentError(
+        "sigma * sqrt(dt) must be finite, got sigma=$sigma, dt=$dt"))
     (0 <= refrac_t <= typemax(Int32)) || throw(ArgumentError(
         "refrac_t must be in [0, typemax(Int32)], got $refrac_t"))
     (isfinite(tau_trace) && tau_trace > 0) || throw(ArgumentError(
@@ -608,6 +610,13 @@ function _validate_tau_m(tau_m::Float32)
     return nothing
 end
 
+"""Forward-Euler leak `1 - dt/tau_m` decays only when `dt < 2*tau_m`."""
+function _validate_euler_leak(dt::Float32, tau_m::Float32)
+    dt < 2 * tau_m || throw(ArgumentError(
+        "dt must be < 2*tau_m so the Euler leak decays (got dt=$dt, tau_m=$tau_m)"))
+    return nothing
+end
+
 """
     SparseBrain(tau_m; cfg=BrainConfig(), n_in=14, n_out=16, name="default") -> SparseBrain
 
@@ -654,6 +663,7 @@ function SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(),
     tau_m = Float32(tau_m)
     _validate_lobe_dims(n_in, n_out)
     _validate_tau_m(tau_m)
+    _validate_euler_leak(cfg.dt, tau_m)
     # 14 GB is the floor for the default 65,536-neuron lobe. Smaller cfg.N
     # still requires a CUDA device, but not that card size.
     _require_cuda("SparseBrain"; min_vram_gb=cfg.N == N ? 14 : nothing)
@@ -1390,6 +1400,9 @@ function EnsembleBrain(; n_in::Int=14, n_out::Int=16,
     n_lobes, tau32 = _validate_ensemble_spec(taus, weights, names)
     lobe_names = _ensemble_lobe_names(n_lobes, names)
     w = Float32[Float32(x) for x in weights]
+    for t in tau32
+        _validate_euler_leak(cfg.dt, t)
+    end
     _require_cuda("EnsembleBrain"; min_vram_gb=cfg.N == N ? 14 : nothing)
     @debug "[ensemble] Initializing $(n_lobes) lobes × $(cfg.N) = $(n_lobes * cfg.N) neurons"
 
@@ -1508,9 +1521,10 @@ with `eb.weights`.
 # Keyword Arguments
 - `inhibition`, `reflex_eta`, `plasticity`, `recurrent_eta`, `sync`,
   `record_history`, `use_device_noise`: forwarded to each lobe's `step!`.
-- `reflex_signal`: when `|reflex_signal| > 0.1`, Fast lobe (index 1, τ_m=10ms)
-  gets a 5× **readout** learning-rate boost (`reflex_eta` only). Does not scale
-  `recurrent_eta` / pair STDP.
+- `reflex_signal`: when `|reflex_signal| > 0.1`, the minimum-τ lobe (earliest
+  index on a tie) gets a 5× **readout** learning-rate boost (`reflex_eta` only).
+  Does not scale `recurrent_eta` / pair STDP. Default taus put that lobe first
+  (`τ_m=10`).
 
 Mid-lobe `CUDA.synchronize()` is suppressed; one sync runs after aggregation
 when `sync=true`. Spike-rate host reductions also run only when `sync=true`.
@@ -1529,7 +1543,7 @@ using LiquidCortex, CUDA
 ensemble = EnsembleBrain(; n_in=8, n_out=4)
 u = CUDA.zeros(Float32, 8)
 ensemble_step!(ensemble, u; inhibition=0.3f0)
-ensemble_step!(ensemble, u; inhibition=0.1f0, reflex_signal=0.5f0)  # Fast-lobe boost
+ensemble_step!(ensemble, u; inhibition=0.1f0, reflex_signal=0.5f0)  # min-τ boost
 y = get_ensemble_output(ensemble)
 ```
 """

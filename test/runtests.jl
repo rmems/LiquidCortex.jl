@@ -151,6 +151,10 @@ end
         @test_throws ArgumentError SparseBrain(-1.0f0)
         @test_throws ArgumentError SparseBrain(NaN32)
         @test_throws ArgumentError SparseBrain(Inf32)
+        @test_throws ArgumentError SparseBrain(1.0f0; cfg=BrainConfig(dt=3, tau_trace=20))
+        @test_throws ArgumentError EnsembleBrain(;
+            taus=Float32[1.0], weights=Float32[1.0],
+            cfg=BrainConfig(dt=3, tau_trace=20, N=32, hist_depth=4))
         @test_throws ArgumentError SparseBrain(20.0f0; n_in=0)
         @test_throws ArgumentError SparseBrain(20.0f0; n_out=-3)
         @test_throws ArgumentError EnsembleBrain(; n_in=0)
@@ -316,6 +320,7 @@ end
         @test_throws ArgumentError BrainConfig(max_inhibition=-1)
         @test_throws ArgumentError BrainConfig(v_rest=NaN32)
         @test_throws ArgumentError BrainConfig(dt=Inf32)
+        @test_throws ArgumentError BrainConfig(sigma=floatmax(Float32), dt=2, tau_trace=3)
 
         errN = try
             BrainConfig(N=0)
