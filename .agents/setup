@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Amp orb setup for LiquidCortex.jl.
+#
+# Amp runs this from the repository root when it builds a project orb snapshot
+# (Debian 12, CPU only: orbs have no GPU). It must finish within 20 minutes and
+# be safe to run more than once. See https://ampcode.com/docs/orbs/customizing
+#
+# Installs only what this repo's CI and manifests need:
+#   - juliaup 1.13 [default]
+#   - Pkg.instantiate() + Pkg.precompile() (as in ci.yml)
+#
+# It ends with a dependency fetch/prebuild, not a test run.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# --- Julia (juliaup) ---
+# ci.yml uses Julia 1.13 (gpu-ci.yml asserts 1.13).
+JULIA_CHANNEL="1.13"
+export PATH="$HOME/.juliaup/bin:$PATH"
+if ! command -v juliaup >/dev/null 2>&1; then
+  curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel "$JULIA_CHANNEL"
+fi
+if ! juliaup status | awk -v ch="$JULIA_CHANNEL" '{for (i = 1; i <= NF; i++) if ($i == ch) found = 1} END {exit !found}'; then
+  juliaup add "$JULIA_CHANNEL"
+fi
+juliaup default "$JULIA_CHANNEL"
+
+# --- Julia dependencies ---
+julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+echo "Amp orb setup for LiquidCortex.jl finished."
