@@ -9,6 +9,7 @@
 #   - apt: curl, ca-certificates
 #   - juliaup 1.13 [default]
 #   - Pkg.instantiate() + Pkg.precompile() (as in ci.yml)
+#   - tool directories exposed to later shells (/etc/profile.d + /usr/local/bin links)
 #
 # It ends with a dependency fetch/prebuild, not a test run.
 set -euo pipefail
@@ -51,5 +52,26 @@ juliaup default "$JULIA_CHANNEL"
 
 # --- Julia dependencies ---
 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+# --- Expose the tools to later shells ---
+# The PATH exports above last only for this script; Amp starts the agent's shell
+# separately. Login shells get these directories from /etc/profile.d, and every other
+# shell finds the entry points through symlinks in /usr/local/bin (on the default PATH).
+tool_dirs=("$HOME/.juliaup/bin")
+# shellcheck disable=SC2016 # $PATH must expand when the profile is sourced, not now.
+printf 'export PATH="%s:$PATH"\n' "$(IFS=:; echo "${tool_dirs[*]}")" |
+  $SUDO tee /etc/profile.d/amp-orb-LiquidCortex.jl.sh >/dev/null
+for dir in "${tool_dirs[@]}"; do
+  [ -d "$dir" ] || continue
+  for tool in "$dir"/*; do
+    name="${tool##*/}"
+    case "$name" in
+      python* | pip* | activate* | deactivate | Activate.ps1) continue ;;
+    esac
+    if [ -f "$tool" ] && [ -x "$tool" ]; then
+      $SUDO ln -sfn "$tool" "/usr/local/bin/$name"
+    fi
+  done
+done
 
 echo "Amp orb setup for LiquidCortex.jl finished."
