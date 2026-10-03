@@ -16,6 +16,9 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"; rm -f Manifest.toml' EXIT
+
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
   SUDO="sudo"
@@ -43,7 +46,11 @@ apt_install curl ca-certificates
 JULIA_CHANNEL="1.13"
 export PATH="$HOME/.juliaup/bin:$PATH"
 if ! command -v juliaup >/dev/null 2>&1; then
-  curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel "$JULIA_CHANNEL"
+  installer="$tmp_dir/juliainstaller"
+  curl -fsSL https://julialang-s3.julialang.org/juliaup/bin/juliainstaller-1.22.7-x86_64-unknown-linux-musl -o "$installer"
+  echo "2f6cb3beff3e14b78890fb52dc6d44ec2d2a5bf2c703d2d478d6e519c863eae0  $installer" | sha256sum --check
+  chmod +x "$installer"
+  "$installer" --yes --default-channel "$JULIA_CHANNEL"
 fi
 if ! juliaup status | awk -v ch="$JULIA_CHANNEL" '{for (i = 1; i <= NF; i++) if ($i == ch) found = 1} END {exit !found}'; then
   juliaup add "$JULIA_CHANNEL"
@@ -51,6 +58,8 @@ fi
 juliaup default "$JULIA_CHANNEL"
 
 # --- Julia dependencies ---
+# Library consumers resolve freely; do not persist an ignored setup-time lockfile.
+rm -f Manifest.toml
 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
 # --- Expose the tools to later shells ---
