@@ -69,6 +69,9 @@ end
 [`reset!`](@ref reset!(::SparseBrain)) every lobe and zero the aggregated
 readout. Per-lobe weights and aggregation weights are kept.
 
+Also clears the `desynchronized` poison flag so a previously failed ensemble
+can be reused after rewinding state.
+
 # Arguments
 - `eb::EnsembleBrain`: ensemble to rewind (mutated in place)
 
@@ -85,6 +88,7 @@ function reset!(eb::EnsembleBrain; keep_weights::Bool=true)
         reset!(lobe; keep_weights=keep_weights)
     end
     fill!(eb.agg_output, 0.0f0)
+    eb.desynchronized = false
     CUDA.synchronize()
     return eb
 end
