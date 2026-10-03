@@ -586,6 +586,9 @@ mutable struct SparseBrain
     name::String
     u_buf::CuVector{Float32}
 
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+    freed::Bool                       # true after free!; blocks step!/reset!/get_output
+
     # Hide the auto-generated all-fields positional constructor (it otherwise
     # dominates MethodError "closest candidates" with an unreadable wall).
     # `new(args...)` would otherwise accept a prefix and leave later fields
@@ -738,7 +741,8 @@ function SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(),
         history, 1, false,
         Float32(cfg.v_thresh),
         0, 0, 0.0f0,
-        name, u_buf)
+        name, u_buf,
+        false)  # freed
 end
 
 const PLASTICITY_MODES = (:readout_only, :recurrent_stdp, :none)
@@ -819,6 +823,7 @@ end
 """Validate public step kwargs. Throws `LiquidCortexValidationError` on misuse."""
 function _validate_step_kwargs!(brain::SparseBrain, u::AbstractVector;
     plasticity::Symbol, recurrent_eta::Real)
+    _assert_not_freed(brain)
     length(u) == brain.n_in || throw(LiquidCortexValidationError(
         "input has length $(length(u)), expected $(brain.n_in)"))
     _validate_plasticity_kwargs(; plasticity=plasticity, recurrent_eta=recurrent_eta)
@@ -1055,6 +1060,7 @@ length(y) == 4
 ```
 """
 function get_output(brain::SparseBrain)
+    _assert_not_freed(brain)
     return Array(brain.output)
 end
 
