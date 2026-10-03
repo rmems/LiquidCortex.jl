@@ -42,7 +42,7 @@ brain.tick_count == 0
 """
 function reset!(brain::SparseBrain; keep_weights::Bool=true)
     _validate_reset_kwargs(; keep_weights=keep_weights)
-    fill!(brain.V, V_REST)
+    fill!(brain.V, brain.cfg.v_rest)
     fill!(brain.S, 0.0f0)
     fill!(brain.refrac, Int32(0))
     fill!(brain.S_f16, Float16(0))
@@ -55,7 +55,7 @@ function reset!(brain::SparseBrain; keep_weights::Bool=true)
     fill!(brain.history, 0.0f0)
     brain.hist_idx = 1
     brain.hist_full = false
-    brain.v_thresh_dynamic = Float32(V_THRESH)
+    brain.v_thresh_dynamic = Float32(brain.cfg.v_thresh)
     brain.tick_count = 0
     brain.total_spikes = 0
     brain.last_spike_rate = 0.0f0
