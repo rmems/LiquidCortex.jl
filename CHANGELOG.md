@@ -15,6 +15,9 @@ change under `0.2.0`.
 
 ### Added
 
+- `BrainConfig` for reservoir size, connectivity, spectral radius, LIF/STDP
+  knobs, and a host RNG. `SparseBrain` and `EnsembleBrain` take `cfg`;
+  `tau_m` accepts any `Real`.
 - `CHANGELOG.md`, TagBot, and CompatHelper (Julia `[compat]` scanner).
 - Dependabot `julia` ecosystem (Dependabot now supports Julia; `#64` noted the
   previous gap). Deprecated Dependabot `reviewers:` key removed in favor of
