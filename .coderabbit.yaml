@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Draft CodeRabbit config for rmems/LiquidCortex.jl (generated locally, not pushed).
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  fail_commit_status: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+  - path: '{src,test,examples}/**/*.jl'
+    instructions: Julia package code. `[compat] julia = "1.10, 1.11, 1.12"`; CI runs Julia 1.13 only (1.10/1.11 are never built). Do not use Base/stdlib APIs newer than the compat floor without raising it. Review for type stability in hot paths (concrete struct field types, no abstractly typed containers, no non-`const` globals, no `Any`-returning branches), avoidable allocations in inner loops, and changes to exported API. GPU tests must be gated by `LiquidCortex._cuda_available[]` (no `@test_skip` literals) so the CPU suite passes without CUDA; stochastic GPU cases seed both `Random` and `CUDA.seed!`.
+  - path: '**/Project.toml'
+    instructions: Julia Project.toml. New `[deps]` entries should get a `[compat]` bound; flag widened or dropped bounds and any UUID change (UUIDs are immutable once registered). CUDA.jl compat is `6`.
+  - path: .github/ci-manifest/Manifest.toml
+    instructions: Resolver output committed on purpose. Do not review it line by line; only flag a changed `julia_version`, churn that is not explained by a Project.toml change, or resolved versions that violate `[compat]`.
+  - path: README.md
+    instructions: Pure markdown only, no HTML elements (Codacy lints `<a>`/`<img>`).
+  - path: .github/workflows/**
+    instructions: GitHub Actions workflows. Keep `permissions:` least-privilege and job commands in sync with the local gates documented in the repo. Every `uses:` is pinned to a full commit SHA today; new or bumped actions must be too. GPU CI runs on `[self-hosted, Linux, X64, gpu]` with a repo-wide concurrency group; keep it gated away from fork PRs.
+  tools:
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
