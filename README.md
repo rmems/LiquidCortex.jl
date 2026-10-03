@@ -17,13 +17,13 @@ and STDP covariance learning.
 
 ## Features
 
-- `SparseBrain` — configurable reservoir: N neurons, connectivity probability, Float16 sparse weights on GPU
-- Configurable input/output dimensions (`n_in`, `n_out`)
+- `SparseBrain` — configurable reservoir via `BrainConfig`: N neurons, connectivity, spectral radius, Float16 sparse weights on GPU
+- Configurable input/output dimensions (`n_in`, `n_out`) and an explicit `rng` for reproducible topology / noise
 - OU-SDE dynamics: `dV = ((V_rest - V)/τ + I_rec + I_ext)dt + σ dW`
 - cuSPARSE Float16 sparse mat-vec on GPU (fits 65k neurons in 16 GB VRAM)
 - STDP covariance learning with eligibility traces
-- 1000-tick rolling spike history buffer (circular, on-GPU)
-- `EnsembleBrain` — multi-lobe: multiple reservoirs with different time constants
+- Configurable rolling spike history buffer (circular, on-GPU; default 1000 ticks)
+- `EnsembleBrain` — multi-lobe: multiple reservoirs with different time constants (`taus` / `weights`)
 - Generic inhibition interface — caller provides a stress signal
 
 ## Installation
@@ -36,7 +36,7 @@ Pkg.add(url="https://github.com/rmems/LiquidCortex.jl")
 ## Quick Start
 
 ```julia
-using LiquidCortex, CUDA
+using LiquidCortex, CUDA, Random
 
 # Create a 65,536-neuron sparse LSM lobe
 # tau_m accepts Float64 / Int: SparseBrain(20.0) and SparseBrain(20) both work
@@ -44,6 +44,10 @@ brain = SparseBrain(20.0)  # τ_m = 20ms, default n_in=14, n_out=16
 
 # Or with custom dimensions:
 #   brain = SparseBrain(20.0; n_in=8, n_out=4)
+
+# Or a small, seeded reservoir for sweeps / tests:
+#   cfg = BrainConfig(N=256, spectral_radius=0.8f0, rng=Random.Xoshiro(42))
+#   brain = SparseBrain(20.0f0; cfg=cfg, n_in=8, n_out=4)
 
 # Or create the full 4-lobe ensemble (262,144 neurons)
 ensemble = EnsembleBrain()
@@ -58,16 +62,18 @@ output = get_output(brain)
 
 `using LiquidCortex` succeeds on CPU-only machines. Constructing `SparseBrain`
 or `EnsembleBrain`, or calling `run_lsm_step`, fails immediately with a CUDA /
-VRAM message (no ~40 s host COO draw). The 2,048-neuron reference LSM is the
-small-scale path until reservoir size is configurable.
+VRAM message (no ~40 s host COO draw). Default `N=65_536` asks for ≥14 GB VRAM;
+smaller reservoirs pass `BrainConfig(N=...)`. The 2,048-neuron reference LSM
+remains the dense small-scale path.
 
 ## Public API
 
 | Type / Function | Description |
 |-----------------|-------------|
-| `SparseBrain(tau_m; n_in, n_out, name)` | Create a 65,536-neuron sparse reservoir lobe (`tau_m` is `Real`) |
-| `EnsembleBrain(; n_in, n_out)` | Create 4-lobe ensemble (262,144 neurons) |
-| `step!(brain, u; inhibition, reflex_eta, ...)` | Execute one simulation timestep (`CommonSolve.step!`; host or `CuVector`) |
+| `BrainConfig(; N, conn_prob, spectral_radius, rng, ...)` | Reservoir hyperparameters (defaults match module constants) |
+| `SparseBrain(tau_m; cfg, n_in, n_out, name)` | Sparse reservoir lobe (`tau_m::Real`, default `N=65_536`) |
+| `EnsembleBrain(; n_in, n_out, cfg, taus, weights)` | Multi-lobe ensemble (default 4 × 65,536) |
+| `step!(brain, u; inhibition, reflex_eta, ...)` | One timestep (`CommonSolve.step!`; host vector or `CuVector`) |
 | `ensemble_step!(eb, u; inhibition, reflex_eta, reflex_signal, ...)` | Step all lobes and aggregate |
 | `get_output(brain)` | Copy readout from GPU to CPU |
 | `get_ensemble_output(eb)` | Copy aggregated readout |
@@ -95,7 +101,7 @@ LiquidCortex is an experimental Julia package. Defaults are intentional:
 | `recurrent_eta` | default `1f-4` | Learning rate for `:recurrent_stdp` |
 | `sync` | default `true` | `CUDA.synchronize()` at end of step; host spike diagnostics only when true |
 | `record_history` | default `true` | Write spike history; if false, covariance helpers may see stale/incomplete history |
-| `use_device_noise` | default `false` | Host Gaussian noise upload; device RNG with host fallback if unavailable |
+| `use_device_noise` | default `false` | Host Gaussian noise from `brain.cfg.rng`; `true` uses CUDA's device RNG (`CUDA.seed!`, not `Random.seed!`) with a one-shot host fallback if the device generator fails |
 
 Recurrent reservoir weights are **not** trained under the default path.
 Requires **CUDA.jl 6.x**. Local verification and CI workflows use **Julia 1.13**.
@@ -117,7 +123,8 @@ threshold); reset to `V_reset` = −70 mV, which is distinct from `V_rest` = −
 ΔW_ij = η (⟨s_i s_j⟩ - ⟨s_i⟩⟨s_j⟩)
 ```
 
-Computed on a subsampled 8192-neuron window to avoid O(N²) blow-up.
+Computed on a subsampled window (`BrainConfig.cov_subsample`, default 8192,
+clamped to `N`) to avoid O(N²) blow-up.
 
 *Bi & Poo (1998); Hebb (1949)*
 
