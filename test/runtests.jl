@@ -467,7 +467,7 @@ end
         outs = (ones(Float32, 4), fill(2.0f0, 4), zeros(Float32, 4), fill(0.5f0, 4))
         LiquidCortex._weighted_sum!(agg, Float32[0.4, 0.3, 0.2, 0.1], outs)
         @test all(agg .≈ 0.4f0 * 1 + 0.3f0 * 2 + 0.2f0 * 0 + 0.1f0 * 0.5f0)
-        @test_throws BoundsError LiquidCortex._weighted_sum!(
+        @test_throws LiquidCortex.LiquidCortexValidationError LiquidCortex._weighted_sum!(
             agg, Float32[0.4, 0.3], outs)
 
         # Covariance subsample clamps to N (would BoundsError at COV_SUBSAMPLE=8192).
@@ -867,7 +867,7 @@ end
                 saved_weights = copy(ensemble.weights)
                 @test ensemble.desynchronized == false
                 ensemble.weights = saved_weights[1:2]
-                @test_throws BoundsError LiquidCortex._commit_ensemble_aggregate!(ensemble)
+                @test_throws LiquidCortexValidationError LiquidCortex._commit_ensemble_aggregate!(ensemble)
                 @test Array(ensemble.agg_output) == saved_agg
                 @test ensemble.desynchronized == false
                 ensemble.weights = saved_weights
@@ -887,7 +887,7 @@ end
                 ensemble.lobes[3].tick_count -= 1
                 ensemble.weights = saved_weights[1:2]
                 ticks_before_poison = [l.tick_count for l in ensemble.lobes]
-                @test_throws BoundsError ensemble_step!(ensemble, u_act; plasticity=:none)
+                @test_throws LiquidCortexValidationError ensemble_step!(ensemble, u_act; plasticity=:none)
                 @test ensemble.desynchronized
                 @test all(l.tick_count == ticks_before_poison[i] for (i, l) in enumerate(ensemble.lobes))
                 @test Array(ensemble.agg_output) == saved_agg
