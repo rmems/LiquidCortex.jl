@@ -907,6 +907,13 @@ end
                 @test all(l.hist_idx == 1 && l.hist_full == false for l in ensemble.lobes)
                 @test iszero(CUDA.maximum(abs, ensemble.agg_output))
                 @test all(Array(ensemble.lobes[i].W_out) == W0[i] for i in eachindex(ensemble.lobes))
+                # reset! must clear the poison flag so the ensemble is reusable (#83)
+                @test ensemble.desynchronized == false
+                ensemble_step!(ensemble, u; plasticity=:none)
+                ensemble_step!(ensemble, u; plasticity=:none)
+                @test all(l.tick_count == 2 for l in ensemble.lobes)
+                post_reset_out = get_ensemble_output(ensemble)
+                @test length(post_reset_out) == 4
             finally
                 free!(ensemble)
                 free!(ensemble)  # idempotent
