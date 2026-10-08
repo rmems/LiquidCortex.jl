@@ -1,0 +1,4 @@
+{
+  "name": "LiquidCortex.jl",
+  "install": "bash .cursor/install.sh"
+}
