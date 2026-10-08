@@ -41,6 +41,7 @@ brain.tick_count == 0
 ```
 """
 function reset!(brain::SparseBrain; keep_weights::Bool=true)
+    _assert_not_freed(brain)
     _validate_reset_kwargs(; keep_weights=keep_weights)
     fill!(brain.V, brain.cfg.v_rest)
     fill!(brain.S, 0.0f0)
@@ -89,10 +90,25 @@ function reset!(eb::EnsembleBrain; keep_weights::Bool=true)
     return eb
 end
 
+"""
+    _assert_not_freed(brain::SparseBrain)
+
+Throw `LiquidCortexValidationError` if `free!` has already been called on `brain`.
+Called at the entry of `step!`, `reset!`, and `get_output` to catch use-after-free
+before any GPU buffer is touched.
+"""
+function _assert_not_freed(brain::SparseBrain)
+    brain.freed && throw(LiquidCortexValidationError(
+        "$(brain.name): step!/reset!/get_output called on a freed SparseBrain. " *
+        "Call free! only after you are done using the brain."))
+    return nothing
+end
+
 # Eager device-buffer release. Public `free!` synchronizes first so
 # pending `sync=false` kernels finish; this helper only returns storage
 # to the CUDA.jl pool (`unsafe_free!` is a no-op after the first call).
 function _free_device_buffers!(brain::SparseBrain)
+    brain.freed = true
     CUDA.unsafe_free!(brain.W)
     CUDA.unsafe_free!(brain.pre_idx)
     CUDA.unsafe_free!(brain.post_idx)

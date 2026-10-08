@@ -404,7 +404,8 @@ end
 
 function _weighted_sum!(agg, weights, outputs)
     n = length(outputs)
-    length(weights) == n || throw(BoundsError(weights, n))
+    length(weights) == n || throw(LiquidCortexValidationError(
+        "weights length $(length(weights)) does not match output count $n"))
     fill!(agg, zero(eltype(agg)))
     for (w, y) in zip(weights, outputs)
         agg .+= w .* y
@@ -586,6 +587,9 @@ mutable struct SparseBrain
     name::String
     u_buf::CuVector{Float32}
 
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+    freed::Bool                       # true after free!; blocks step!/reset!/get_output
+
     # Hide the auto-generated all-fields positional constructor (it otherwise
     # dominates MethodError "closest candidates" with an unreadable wall).
     # `new(args...)` would otherwise accept a prefix and leave later fields
@@ -738,7 +742,8 @@ function SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(),
         history, 1, false,
         Float32(cfg.v_thresh),
         0, 0, 0.0f0,
-        name, u_buf)
+        name, u_buf,
+        false)  # freed
 end
 
 const PLASTICITY_MODES = (:readout_only, :recurrent_stdp, :none)
@@ -819,6 +824,7 @@ end
 """Validate public step kwargs. Throws `LiquidCortexValidationError` on misuse."""
 function _validate_step_kwargs!(brain::SparseBrain, u::AbstractVector;
     plasticity::Symbol, recurrent_eta::Real)
+    _assert_not_freed(brain)
     length(u) == brain.n_in || throw(LiquidCortexValidationError(
         "input has length $(length(u)), expected $(brain.n_in)"))
     _validate_plasticity_kwargs(; plasticity=plasticity, recurrent_eta=recurrent_eta)
@@ -1055,6 +1061,7 @@ length(y) == 4
 ```
 """
 function get_output(brain::SparseBrain)
+    _assert_not_freed(brain)
     return Array(brain.output)
 end
 
@@ -1243,6 +1250,22 @@ partially mutating the ensemble, so aggregated output would mix simulated times.
 
 Raised by [`ensemble_step!`](@ref) and [`get_ensemble_output`](@ref).
 GPU neuron state is not rolled back; the ensemble is unusable until discarded.
+
+# Classification
+
+This is a **caller-handled** exception: callers are expected to catch it (e.g.
+with `@test_throws` in tests, or a `try/catch` in application code). It does
+**not** indicate an internal library fault. Any telemetry or error-capture
+layer wrapping `ensemble_step!` should exclude this type (alongside
+`LiquidCortexValidationError`) from automatic capture.
+
+Note: checking `eb.desynchronized` alone is not a sufficient pre-call guard.
+The exception is raised on two distinct paths — a poisoned ensemble
+(`desynchronized == true`) *and* a clock mismatch between lobes
+(`desynchronized` may still be `false`). Callers wishing to avoid the throw
+must check both conditions: `eb.desynchronized` and that all lobe
+`tick_count`s agree. The simplest and most reliable approach is to catch the
+exported exception directly.
 """
 struct EnsembleDesynchronizedError <: Exception
     msg::String
@@ -1449,6 +1472,12 @@ function _ensemble_step_impl!(eb::EnsembleBrain, u::CuVector{Float32};
 
     prev_agg = copy(eb.agg_output)
     try
+        # Validate weights length inside the try block so a mismatch poisons the
+        # ensemble (desynchronized=true) via the catch below, matching the contract
+        # that any failed ensemble_step! leaves the ensemble unusable.
+        length(eb.weights) == length(eb.lobes) || throw(LiquidCortexValidationError(
+            "weights length $(length(eb.weights)) does not match lobe count $(length(eb.lobes))"))
+
         # Prewarm STDP edge lists before the async lobe loop so the first
         # :recurrent_stdp ensemble step does not host-sync mid-loop per lobe.
         if plasticity === :recurrent_stdp && Float32(recurrent_eta) != 0.0f0
