@@ -1,10 +1,13 @@
 name: GPU CI (self-hosted)
 
-# Runs Julia package tests on the local RTX-class runner (labels: self-hosted, Linux, X64, gpu).
-# CPU smoke stays on ubuntu-latest in ci.yml; this job exercises CUDA kernels.
-# Windows coverage is windows-ci.yml (PowerShell on self-hosted, Windows, X64, liquidcortex).
+# GPU tests run on whichever self-hosted runner is online:
+#   Linux  — self-hosted, Linux, X64, gpu (ShipOfTheseus)
+#   Windows — self-hosted, Windows, X64, liquidcortex (DESKTOP-4E1V5HV-liquidcortex)
+# Linux is used when it is online. Otherwise Windows is used.
+# If neither runner is online, both GPU jobs are skipped and the workflow succeeds.
+# CPU smoke stays on ubuntu-latest in ci.yml.
 #
-# Security: never run untrusted fork PR code on the persistent self-hosted host
+# Security: never run untrusted fork PR code on a persistent self-hosted host
 # (GitHub recommendation). Same-repo PRs, pushes, and manual dispatch only.
 on:
   pull_request:
@@ -16,8 +19,6 @@ on:
       - 'release/*'
   workflow_dispatch:
 
-# Serialize per-ref so an unrelated PR does not cancel main/release GPU jobs.
-# The single self-hosted runner still runs at most one job at a time.
 # Do not cancel main/release pushes — only cancel superseded PR runs.
 concurrency:
   group: liquidcortex-gpu-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
@@ -25,14 +26,49 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  gpu-test:
-    name: Julia 1.13.2 — GPU tests (self-hosted)
-    # Fork PRs: skip (do not checkout untrusted code onto the GPU host).
+  select-gpu-runner:
+    name: Select available GPU runner
+    # Fork PRs: skip (do not checkout untrusted code onto a GPU host).
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.pick.outputs.target }}
+    steps:
+      - name: Pick Linux, else Windows, else skip
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runners" > runners.json
+          linux=$(jq '[.runners[]
+            | select(.status == "online")
+            | select(any(.labels[]; .name == "Linux"))
+            | select(any(.labels[]; .name == "gpu"))] | length' runners.json)
+          windows=$(jq '[.runners[]
+            | select(.status == "online")
+            | select(any(.labels[]; .name == "Windows"))
+            | select(any(.labels[]; .name == "liquidcortex"))] | length' runners.json)
+          if [ "$linux" -gt 0 ]; then
+            echo "target=linux" >> "$GITHUB_OUTPUT"
+          elif [ "$windows" -gt 0 ]; then
+            echo "target=windows" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=skip" >> "$GITHUB_OUTPUT"
+          fi
+          echo "online Linux GPU runners: $linux"
+          echo "online Windows liquidcortex runners: $windows"
+          echo "selected: $(grep '^target=' "$GITHUB_OUTPUT" | cut -d= -f2)"
+
+  gpu-linux:
+    name: Julia 1.13.2 — GPU tests (Linux)
+    needs: select-gpu-runner
+    if: needs.select-gpu-runner.outputs.target == 'linux'
     runs-on: [self-hosted, Linux, X64, gpu]
     timeout-minutes: 60
 
@@ -122,3 +158,98 @@ jobs:
           set -euo pipefail
           find src test -name '*.cov' -delete
           rm -f lcov.info
+
+  gpu-windows:
+    name: Julia 1.13.2 — GPU tests (Windows)
+    needs: select-gpu-runner
+    if: needs.select-gpu-runner.outputs.target == 'windows'
+    runs-on: [self-hosted, Windows, X64, liquidcortex]
+    timeout-minutes: 120
+
+    env:
+      JULIA_NUM_THREADS: "1"
+      JULIA_PKG_PRECOMPILE_AUTO: "1"
+
+    # This host's execution policy is Restricted, so the runner's default
+    # `powershell -command ". '{0}'"` wrapper never starts.
+    defaults:
+      run:
+        shell: pwsh -NoProfile -ExecutionPolicy Bypass -File "{0}"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Ensure PowerShell 7
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
+        run: |
+          & .\.github\scripts\ensure-pwsh.ps1
+
+      - name: Install Julia 1.13.2 with juliaup
+        run: |
+          & .\.github\scripts\install-juliaup.ps1
+
+      - name: Verify host toolchain
+        run: |
+          $version = & julia --pkgimages=no --version
+          Write-Host $version
+          & julia --pkgimages=no -e '(VERSION >= v"1.13.2" && VERSION < v"1.14") || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
+          & nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Pin CI Manifest
+        run: Copy-Item -LiteralPath .github/ci-manifest/Manifest.toml -Destination Manifest.toml -Force
+
+      - name: Instantiate
+        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+      - name: Verify CUDA.jl in project
+        run: |
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          @assert CUDA.functional() "CUDA.jl reports non-functional device"
+          println(CUDA.name(CUDA.device()))
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run tests (CPU + GPU)
+        id: tests
+        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; coverage=true)'
+
+      - name: Reclaim GPU memory
+        if: always()
+        run: |
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          if CUDA.functional()
+            CUDA.synchronize()
+            GC.gc(true)
+            CUDA.reclaim()
+            free = CUDA.free_memory() / 1e9
+            total = CUDA.total_memory() / 1e9
+            println("VRAM free/total GB: ", round(free; digits=2), " / ", round(total; digits=2))
+          end
+          '@
+
+      - name: Process coverage
+        if: always() && steps.tests.outcome == 'success'
+        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
+        with:
+          directories: src
+
+      - name: Upload coverage to Codecov
+        if: always() && steps.tests.outcome == 'success'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: lcov.info
+          flags: julia-gpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Remove coverage artifacts
+        if: always()
+        run: |
+          Get-ChildItem -Path src, test -Recurse -Filter *.cov -ErrorAction SilentlyContinue | Remove-Item -Force
+          Remove-Item -Force -ErrorAction SilentlyContinue lcov.info
