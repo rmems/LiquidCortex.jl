@@ -38,6 +38,9 @@ jobs:
     env:
       JULIA_NUM_THREADS: "1"
       JULIA_PKG_PRECOMPILE_AUTO: "1"
+      # NetworkService's depot is under ServiceProfiles. Windows Application
+      # Control blocks the native pkgimage DLLs Julia writes there, so every
+      # julia process on this job is started with --pkgimages=no.
 
     # This host's execution policy is Restricted, so the runner's default
     # `powershell -command ". '{0}'"` wrapper never starts. Bypass is set on
@@ -74,10 +77,10 @@ jobs:
           (github.actor == 'dependabot[bot]' ||
            startsWith(github.head_ref, 'compathelper/') ||
            startsWith(github.head_ref, 'dependabot/'))
-        run: julia --project=. -e 'using Pkg; Pkg.update()'
+        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'
 
       - name: Instantiate
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
       - name: Query NVIDIA driver
         run: |
@@ -94,7 +97,7 @@ jobs:
 
       - name: Exercise CUDA when the device is available
         run: |
-          & julia --project=. -e @'
+          & julia --pkgimages=no --project=. -e @'
           using CUDA
           functional = try
               CUDA.functional()
@@ -119,4 +122,4 @@ jobs:
           '@
 
       - name: Run tests
-        run: julia --project=. -e 'using Pkg; Pkg.test()'
+        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test()'
