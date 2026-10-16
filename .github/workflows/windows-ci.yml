@@ -69,16 +69,6 @@ jobs:
       - name: Pin CI Manifest
         run: Copy-Item -LiteralPath .github/ci-manifest/Manifest.toml -Destination Manifest.toml -Force
 
-      # CompatHelper / Dependabot edit Project.toml but not this lockfile.
-      # Re-resolve so those PRs actually exercise the new [compat] bounds.
-      - name: Refresh lockfile on dependency-bot PRs
-        if: >
-          github.event_name == 'pull_request' &&
-          (github.actor_id == 49699333 ||
-           startsWith(github.head_ref, 'compathelper/') ||
-           startsWith(github.head_ref, 'dependabot/'))
-        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'
-
       - name: Instantiate
         run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
