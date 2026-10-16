@@ -26,11 +26,14 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   select-gpu-runner:
     name: Select available GPU runner
+    # Listing self-hosted runners is an administration read, not an Actions read.
+    permissions:
+      contents: read
+      administration: read
     # Fork PRs: skip (do not checkout untrusted code onto a GPU host).
     if: >
       github.event_name != 'pull_request' ||
