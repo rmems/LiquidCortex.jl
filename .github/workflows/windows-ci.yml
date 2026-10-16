@@ -39,9 +39,13 @@ jobs:
       JULIA_NUM_THREADS: "1"
       JULIA_PKG_PRECOMPILE_AUTO: "1"
 
+    # This host's execution policy is Restricted, so the runner's default
+    # `powershell -command ". '{0}'"` wrapper never starts. Bypass is set on
+    # the shell command line, which still uses pwsh for every step after the
+    # bootstrap.
     defaults:
       run:
-        shell: pwsh
+        shell: pwsh -NoProfile -ExecutionPolicy Bypass -File "{0}"
 
     steps:
       - name: Checkout
@@ -49,16 +53,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # shell is Windows PowerShell 5.1 so this still runs when pwsh is absent.
+      # Windows PowerShell 5.1 is always present. pwsh may not be.
       - name: Ensure PowerShell 7
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
         run: |
-          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
           & .\.github\scripts\ensure-pwsh.ps1
 
       - name: Install Julia 1.13.2 with juliaup
         run: |
-          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
           & .\.github\scripts\install-juliaup.ps1
 
       - name: Pin CI Manifest
