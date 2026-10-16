@@ -3,8 +3,7 @@ name: Windows CI (self-hosted)
 # Package tests on DESKTOP-4E1V5HV-liquidcortex
 # (labels: self-hosted, Windows, X64, liquidcortex).
 # CPU smoke stays on ubuntu-latest in ci.yml.
-# gpu-ci.yml also runs on this host or the Linux GPU host, whichever is online
-# (`runs-on: [self-hosted, X64]`).
+# The GPU job stays on the Linux runner labeled `gpu` (gpu-ci.yml).
 #
 # Security: never run untrusted fork PR code on the persistent self-hosted host
 # (GitHub recommendation). Same-repo PRs, pushes, and manual dispatch only.
