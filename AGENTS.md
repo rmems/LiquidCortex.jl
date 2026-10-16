@@ -46,12 +46,11 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
   Fork pull requests do not check out onto that machine.
   CUDA on the RTX 5080 runs when `CUDA.functional()` is true; CPU tests still run
   when it is not.
-- **GPU tests:** `.github/workflows/gpu-ci.yml` picks one online self-hosted runner.
-  Linux (`self-hosted`, `Linux`, `X64`, `gpu`, host `ShipOfTheseus`) is used when
-  it is online. Otherwise Windows (`self-hosted`, `Windows`, `X64`,
-  `liquidcortex`, host `DESKTOP-4E1V5HV-liquidcortex`) is used. If neither
-  runner is online, both GPU jobs are skipped and the workflow succeeds.
-  Fork pull requests do not check out onto either machine.
+- **GPU tests:** `.github/workflows/gpu-ci.yml` uses `runs-on: [self-hosted, X64]`.
+  GitHub assigns that job to whichever matching runner is online: Linux
+  `ShipOfTheseus` or Windows `DESKTOP-4E1V5HV-liquidcortex`. Fork pull requests
+  do not check out onto either machine. The workflow token cannot list runners,
+  so when both hosts are offline the job stays queued instead of being skipped.
 
 ## PR Instructions
 
