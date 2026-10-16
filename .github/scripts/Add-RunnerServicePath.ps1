@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Prepend a directory to the current step, later steps in this job, and the
 # Windows user/machine PATH. The GitHub Actions runner service reads the
 # machine PATH when it starts; user PATH covers a runner launched as the

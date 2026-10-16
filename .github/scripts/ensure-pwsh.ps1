@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Install PowerShell 7 when the Windows runner does not already have pwsh.
 # Later workflow steps set `shell: pwsh`. Windows PowerShell 5.1 can run this
 # script; it records the pwsh directory on the runner service PATH.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Install Julia 1.13.2 with the official juliaup portable build and put its
 # bin directory on the runner service PATH. A Windows Store install only
 # publishes execution aliases for the interactive user, which this service
