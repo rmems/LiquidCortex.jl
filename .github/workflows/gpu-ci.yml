@@ -51,8 +51,8 @@ jobs:
           set -euo pipefail
           command -v julia
           julia --version
-          # Channel 1.13; this job claims patch 1.13.2.
-          julia -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
+          # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
+          julia -e '(VERSION >= v"1.13.2" && VERSION < v"1.14") || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
       - name: Pin CI Manifest

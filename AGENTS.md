@@ -41,8 +41,9 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - **CPU smoke:** `.github/workflows/ci.yml` → `ubuntu-latest`
 - **Windows tests:** `.github/workflows/windows-ci.yml` → self-hosted runner labels
   `self-hosted`, `Windows`, `X64`, `liquidcortex` (`DESKTOP-4E1V5HV-liquidcortex`).
-  The job installs Julia 1.13.2 with juliaup when `julia` is not already on the
-  runner service `PATH`. Fork pull requests do not check out onto that machine.
+  The job installs Julia 1.13.2 with juliaup (idempotent if it is already
+  installed) and records that bin directory on the runner service account PATH.
+  Fork pull requests do not check out onto that machine.
   CUDA on the RTX 5080 runs when `CUDA.functional()` is true; CPU tests still run
   when it is not.
 - **Linux GPU tests:** `.github/workflows/gpu-ci.yml` → self-hosted runner labels

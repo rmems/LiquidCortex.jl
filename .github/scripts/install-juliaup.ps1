@@ -30,12 +30,21 @@ if (-not $juliaupExe) {
 }
 
 if (-not $juliaupExe) {
+    if (-not $env:RUNNER_TEMP) {
+        throw 'RUNNER_TEMP is not set; this script must run inside a GitHub Actions job.'
+    }
     New-Item -ItemType Directory -Force -Path $defaultBin | Out-Null
     $archive = Join-Path $env:RUNNER_TEMP "juliaup-$JuliaupVersion-windows-portable.tar.gz"
     $asset = "juliaup-$JuliaupVersion-x86_64-pc-windows-gnu-portable.tar.gz"
     $uri = "https://github.com/JuliaLang/juliaup/releases/download/v$JuliaupVersion/$asset"
+    # GitHub release asset digest for the Windows portable juliaup build.
+    $expectedHash = '040b688fc39e2f48a7c7c7ee83cbda88131fa6230ed68db24b2a19a40eb39849'
     Write-Host "Downloading $uri"
     Invoke-WebRequest -Uri $uri -OutFile $archive -UseBasicParsing
+    $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLower()
+    if ($actualHash -ne $expectedHash) {
+        throw "SHA256 mismatch for ${archive}: ${actualHash}"
+    }
     & tar.exe -xzf $archive -C $defaultBin
     if ($LASTEXITCODE -ne 0) {
         throw "tar exited $LASTEXITCODE extracting juliaup"

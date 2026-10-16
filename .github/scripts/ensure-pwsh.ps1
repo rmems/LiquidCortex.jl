@@ -31,12 +31,21 @@ if (-not $pwshExe) {
 }
 
 if (-not $pwshExe) {
+    if (-not $env:RUNNER_TEMP) {
+        throw 'RUNNER_TEMP is not set; this script must run inside a GitHub Actions job.'
+    }
     $dest = Join-Path $env:USERPROFILE '.local\pwsh'
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     $zip = Join-Path $env:RUNNER_TEMP 'PowerShell-7.6.7-win-x64.zip'
     $uri = 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.7/PowerShell-7.6.7-win-x64.zip'
+    # GitHub release asset digest for PowerShell-7.6.7-win-x64.zip.
+    $expectedHash = 'd2f952ebdbf24386cb8923553aa58e41a846db35a6155ea04c58142a4b16dbb7'
     Write-Host "Downloading $uri"
     Invoke-WebRequest -Uri $uri -OutFile $zip -UseBasicParsing
+    $actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+    if ($actualHash -ne $expectedHash) {
+        throw "SHA256 mismatch for ${zip}: ${actualHash}"
+    }
     Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
     $pwshExe = Join-Path $dest 'pwsh.exe'
 }

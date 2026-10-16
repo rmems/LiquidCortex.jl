@@ -74,7 +74,7 @@ jobs:
       - name: Refresh lockfile on dependency-bot PRs
         if: >
           github.event_name == 'pull_request' &&
-          (github.actor == 'dependabot[bot]' ||
+          (github.actor_id == 49699333 ||
            startsWith(github.head_ref, 'compathelper/') ||
            startsWith(github.head_ref, 'dependabot/'))
         run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'

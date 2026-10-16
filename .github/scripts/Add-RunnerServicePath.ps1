@@ -8,15 +8,15 @@
 function Add-RunnerServicePath {
     param([Parameter(Mandatory = $true)][string] $Directory)
 
+    if (-not $env:GITHUB_PATH) {
+        throw 'GITHUB_PATH is not set; this script is for a GitHub Actions job.'
+    }
     $full = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\')
     if (-not (Test-Path -LiteralPath $full)) {
         throw "PATH directory does not exist: $full"
     }
 
     $env:Path = "$full;$env:Path"
-    if (-not $env:GITHUB_PATH) {
-        throw 'GITHUB_PATH is not set; this script is for a GitHub Actions job.'
-    }
     Add-Content -Path $env:GITHUB_PATH -Value $full
     Write-Host "Prepended to job PATH: $full"
 
