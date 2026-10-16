@@ -13,6 +13,12 @@ change under `0.2.0`.
 
 ## [Unreleased]
 
+### Changed
+
+- CI runs Julia **1.13.2** (Actions channel `1.13`). `[compat]` names `1.13`
+  inside `[1.10, 2.0)`. Package tests also run on the Windows self-hosted
+  runner (`self-hosted`, `Windows`, `X64`, `liquidcortex`).
+
 ### Added
 
 - `BrainConfig` for reservoir size, connectivity, spectral radius, LIF/STDP

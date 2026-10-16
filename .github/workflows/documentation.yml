@@ -36,6 +36,10 @@ jobs:
         with:
           version: '1.13'
 
+      # Channel 1.13; fail if the resolved patch is not 1.13.2.
+      - name: Require Julia 1.13.2
+        run: julia -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
+
       - name: Cache Julia artifacts
         uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
 
@@ -69,6 +73,10 @@ jobs:
         uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: '1.13'
+
+      # Channel 1.13; fail if the resolved patch is not 1.13.2.
+      - name: Require Julia 1.13.2
+        run: julia -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0

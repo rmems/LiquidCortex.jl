@@ -6,7 +6,7 @@
 julia --project -e 'using Pkg; Pkg.instantiate()'
 ```
 
-Julia **1.13** is what CI runs. Compat admits `1.10`–`<2.0`.
+Julia **1.13.2** is what CI runs (Actions channel `1.13`). Compat admits `1.10`–`<2.0` and names `1.13`.
 
 ## Tests
 

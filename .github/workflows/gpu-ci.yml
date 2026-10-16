@@ -2,6 +2,7 @@ name: GPU CI (self-hosted)
 
 # Runs Julia package tests on the local RTX-class runner (labels: self-hosted, Linux, X64, gpu).
 # CPU smoke stays on ubuntu-latest in ci.yml; this job exercises CUDA kernels.
+# Windows coverage is windows-ci.yml (PowerShell on self-hosted, Windows, X64, liquidcortex).
 #
 # Security: never run untrusted fork PR code on the persistent self-hosted host
 # (GitHub recommendation). Same-repo PRs, pushes, and manual dispatch only.
@@ -27,7 +28,7 @@ permissions:
 
 jobs:
   gpu-test:
-    name: Julia 1.13 — GPU tests (self-hosted)
+    name: Julia 1.13.2 — GPU tests (self-hosted)
     # Fork PRs: skip (do not checkout untrusted code onto the GPU host).
     if: >
       github.event_name != 'pull_request' ||
@@ -50,8 +51,8 @@ jobs:
           set -euo pipefail
           command -v julia
           julia --version
-          # Job claims Julia 1.13; fail early if runner default drifts.
-          julia -e 'VERSION.major == 1 && VERSION.minor == 13 || error("expected Julia 1.13, got $VERSION")'
+          # Channel 1.13; this job claims patch 1.13.2.
+          julia -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
       - name: Pin CI Manifest

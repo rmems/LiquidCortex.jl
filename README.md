@@ -104,7 +104,7 @@ LiquidCortex is an experimental Julia package. Defaults are intentional:
 | `use_device_noise` | default `false` | Host Gaussian noise from `brain.cfg.rng`; `true` uses CUDA's device RNG (`CUDA.seed!`, not `Random.seed!`) with a one-shot host fallback if the device generator fails |
 
 Recurrent reservoir weights are **not** trained under the default path.
-Requires **CUDA.jl 6.x**. Local verification and CI workflows use **Julia 1.13**.
+Requires **CUDA.jl 6.x**. Local verification and CI workflows use **Julia 1.13.2** (Actions channel `1.13`).
 
 ## OU-SDE Membrane Dynamics
 
