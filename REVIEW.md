@@ -17,7 +17,7 @@
 
 ### CI/CD
 
-- [ ] Julia 1.13 CI passes (CPU ubuntu-latest + GPU self-hosted when available)
+- [ ] Julia 1.13.2 CI passes (channel `1.13`; CPU ubuntu-latest and windows-latest, Windows self-hosted, and Linux GPU self-hosted when available)
 - [ ] No Codacy warnings (SHA-pinned actions, no inline HTML in markdown)
 - [ ] No unresolved bot review threads
 

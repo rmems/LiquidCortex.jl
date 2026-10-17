@@ -13,6 +13,14 @@ change under `0.2.0`.
 
 ## [Unreleased]
 
+### Changed
+
+- CI runs Julia **1.13.2** (Actions channel `1.13`). `[compat]` names `1.13`
+  inside `[1.10, 2.0)`. CPU smoke runs on `ubuntu-latest` and GitHub-hosted
+  `windows-latest`. Package tests also run on the Windows self-hosted
+  runner (`self-hosted`, `Windows`, `X64`, `liquidcortex`). Documentation
+  PRs build on both Ubuntu and Windows; deploy stays on Ubuntu.
+
 ### Added
 
 - `BrainConfig` for reservoir size, connectivity, spectral radius, LIF/STDP
