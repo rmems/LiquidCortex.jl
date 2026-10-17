@@ -38,7 +38,8 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - GPU tests gated by `LiquidCortex._cuda_available[]` (no `@test_skip` literals)
 - Stochastic GPU cases seed host `Random` and `CUDA.seed!`
 - CI workflows run Julia **1.13.2** only, requested as the `1.13` channel. Compat declares `1.10, 1.11, 1.12, 1.13`, which resolves to the range `[1.10, 2.0)`. 1.10 and 1.11 are never built.
-- **CPU smoke:** `.github/workflows/ci.yml` → `ubuntu-latest`
+- **CPU smoke:** `.github/workflows/ci.yml` → `ubuntu-latest` and GitHub-hosted
+  `windows-latest` (CUDA is not available on `windows-latest`; coverage is Ubuntu-only)
 - **Windows tests:** `.github/workflows/windows-ci.yml` → self-hosted runner labels
   `self-hosted`, `Windows`, `X64`, `liquidcortex` (`DESKTOP-4E1V5HV-liquidcortex`).
   The job installs Julia 1.13.2 with juliaup (idempotent if it is already

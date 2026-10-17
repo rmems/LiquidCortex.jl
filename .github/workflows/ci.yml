@@ -18,12 +18,13 @@ permissions:
 
 jobs:
   test:
-    name: Julia 1.13.2 (channel ${{ matrix.julia-version }}) — CPU smoke tests
-    runs-on: ubuntu-latest
+    name: Julia 1.13.2 (channel ${{ matrix.julia-version }}) — CPU smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         julia-version: ['1.13']
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout
@@ -36,7 +37,7 @@ jobs:
 
       # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
       - name: Require Julia 1.13.2 or newer 1.13
-        run: julia -e '(VERSION >= v"1.13.2" && VERSION < v"1.14") || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
+        run: julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
@@ -49,25 +50,31 @@ jobs:
       - name: Refresh lockfile on dependency-bot PRs
         if: >
           github.event_name == 'pull_request' &&
-          (github.actor == 'dependabot[bot]' ||
-           startsWith(github.head_ref, 'compathelper/') ||
+          (startsWith(github.head_ref, 'compathelper/') ||
            startsWith(github.head_ref, 'dependabot/'))
         run: julia --project=. -e 'using Pkg; Pkg.update()'
 
       - name: Instantiate
         run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
-      # Coverage is collected on this same run so the suite is not executed twice
-      # (once here and once in a duplicate codecov.yml workflow). See issue #64.
+      # Coverage is collected on Ubuntu so the suite is not executed twice.
+      # windows-latest is the CUDA-unavailable CPU path (see issue #64).
       - name: Run tests with coverage
+        if: runner.os == 'Linux'
         run: julia --project=. -e 'using Pkg; Pkg.test(; coverage=true)'
 
+      - name: Run tests
+        if: runner.os == 'Windows'
+        run: julia --project=. -e 'using Pkg; Pkg.test()'
+
       - name: Process coverage
+        if: runner.os == 'Linux'
         uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
         with:
           directories: src
 
       - name: Upload coverage to Codecov
+        if: runner.os == 'Linux'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov.info

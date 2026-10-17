@@ -2,7 +2,7 @@ name: Windows CI (self-hosted)
 
 # Package tests on DESKTOP-4E1V5HV-liquidcortex
 # (labels: self-hosted, Windows, X64, liquidcortex).
-# CPU smoke stays on ubuntu-latest in ci.yml.
+# GitHub-hosted CPU smoke on windows-latest is in ci.yml (no CUDA).
 # The GPU job stays on the Linux runner labeled `gpu` (gpu-ci.yml).
 #
 # Security: never run untrusted fork PR code on the persistent self-hosted host
@@ -11,6 +11,9 @@ on:
   pull_request:
     branches:
       - '**'
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
   push:
     branches:
       - main
@@ -46,7 +49,8 @@ jobs:
     # This host's execution policy is Restricted, so the runner's default
     # `powershell -command ". '{0}'"` wrapper never starts. Bypass is set on
     # the shell command line, which still uses pwsh for every step after the
-    # bootstrap.
+    # bootstrap. The runner does not append LASTEXITCODE handling to a custom
+    # -File shell, so each julia call checks $LASTEXITCODE.
     defaults:
       run:
         shell: pwsh -NoProfile -ExecutionPolicy Bypass -File "{0}"
@@ -62,16 +66,36 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
         run: |
           & .\.github\scripts\ensure-pwsh.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install Julia 1.13.2 with juliaup
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & .\.github\scripts\install-juliaup.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Pin CI Manifest
         run: Copy-Item -LiteralPath .github/ci-manifest/Manifest.toml -Destination Manifest.toml -Force
 
+      # CompatHelper / Dependabot edit Project.toml but not this lockfile.
+      - name: Refresh lockfile on dependency-bot PRs
+        if: >
+          github.event_name == 'pull_request' &&
+          (startsWith(github.head_ref, 'compathelper/') ||
+           startsWith(github.head_ref, 'dependabot/'))
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Instantiate
-        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Query NVIDIA driver
         run: |
@@ -88,6 +112,8 @@ jobs:
 
       - name: Exercise CUDA when the device is available
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & julia --pkgimages=no --project=. -e @'
           using CUDA
           functional = try
@@ -111,6 +137,11 @@ jobs:
           println("CUDA sum(ones(Float32, 8)) = ", total)
           total == 8 || error("CUDA reduction mismatch: $total")
           '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run tests
-        run: julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test()'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; julia_args=["--pkgimages=no"])'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

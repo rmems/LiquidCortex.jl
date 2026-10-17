@@ -74,7 +74,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "julia --version exited $LASTEXITCODE"
 }
 & $juliaupExe status
-& $juliaExe -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
+& $juliaExe -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
 if ($LASTEXITCODE -ne 0) {
     throw "Julia version check failed"
 }
