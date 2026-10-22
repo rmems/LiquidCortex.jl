@@ -562,6 +562,21 @@ end
         @test_throws ArgumentError ReferenceLSM(
             zeros(Float32, 4, 3), zeros(Float32, 4, 2),
             zeros(Float32, 1, 4), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 3, 2),
+            zeros(Float32, 1, 4), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 2),
+            zeros(Float32, 1, 3), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 2),
+            zeros(Float32, 1, 4), zeros(Float32, 3))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 0),
+            zeros(Float32, 1, 4), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 2),
+            zeros(Float32, 0, 4), zeros(Float32, 4))
     end
 
     @testset "CPU: Reference LSM instances do not share state" begin
@@ -605,6 +620,47 @@ end
         @test s isa String
         @test length(split(s, ",")) == 2
         @test occursin("ReferenceLSM", sprint(show, a))
+
+        y_f64 = run_lsm_step!(a, Float64[0.1, 0.2, 0.3], 0.0)
+        @test y_f64 isa Vector{Float32}
+        @test length(y_f64) == 2
+        @test_throws DimensionMismatch run_lsm_step!(a, Float32[0.0, 0.0], 0.0f0)
+    end
+
+    @testset "CPU: deprecated default-instance accessors" begin
+        original_state = snapshot_reference_lsm_state()
+        try
+            clear_reference_lsm_state!()
+            @test LiquidCortex._ref_W[] === nothing
+            @test LiquidCortex._ref_n_in[] == LiquidCortex.REF_IN_DEFAULT
+            @test LiquidCortex._ref_initialized[] == false
+            @test_throws ErrorException (LiquidCortex._ref_n_in[] = 8)
+
+            host = ReferenceLSM(; n_in=3, n_out=2, N=4,
+                rng=Random.Xoshiro(1), gpu=false)
+            LiquidCortex._default_ref_lsm[] = host
+            @test LiquidCortex._ref_initialized[] == true
+            @test LiquidCortex._ref_n_in[] == 3
+            @test LiquidCortex._ref_n_out[] == 2
+            @test LiquidCortex._ref_W[] === host.W
+            LiquidCortex._ref_n_in[] = 9
+            @test host.n_in == 9
+            LiquidCortex._ref_Win[] = nothing
+            @test LiquidCortex._default_ref_lsm[] === nothing
+            LiquidCortex._default_ref_lsm[] = host
+            LiquidCortex._ref_W[] = nothing
+            @test LiquidCortex._default_ref_lsm[] === nothing
+
+            host2 = ReferenceLSM(; n_in=3, n_out=2, N=4,
+                rng=Random.Xoshiro(2), gpu=false)
+            LiquidCortex._default_ref_lsm[] = host2
+            LiquidCortex._ref_initialized[] = false
+            @test LiquidCortex._default_ref_lsm[] === nothing
+            LiquidCortex._ref_initialized[] = true
+            @test LiquidCortex._default_ref_lsm[] === nothing
+        finally
+            restore_reference_lsm_state!(original_state)
+        end
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
