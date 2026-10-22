@@ -13,14 +13,17 @@ Provides two LSM implementations:
   Configurable input/output dimensions. Default ensemble requires RTX-class
   GPU with ≥14 GB VRAM.
 
-- **Reference LSM** (`reference_lsm.jl`) — 2,048-neuron dense CUDA reservoir for
-  rapid prototyping. Configurable input/output dimensions.
+- **Reference LSM** (`reference_lsm.jl`) — `ReferenceLSM` dense reservoir
+  (default 2,048 neurons) for rapid prototyping. Configurable input/output
+  dimensions. `run_lsm_step` uses a process-wide default instance.
 
 On CPU-only systems the module loads cleanly — types and API functions are defined
 without touching a device. Constructing `SparseBrain` / `EnsembleBrain` or
 calling `run_lsm_step` requires a CUDA GPU and fails immediately (no multi-GB
-host COO draw). The 2,048-neuron reference LSM defers its GPU allocations until
-the first step. Check `LiquidCortex._cuda_available[]` to test CUDA availability.
+host COO draw). `ReferenceLSM(; gpu=false)` allocates host arrays for CPU
+tests. The process-wide default reference LSM defers GPU allocations until
+the first `run_lsm_step`. Check `LiquidCortex._cuda_available[]` to test
+CUDA availability.
 """
 module LiquidCortex
 
@@ -98,7 +101,8 @@ export spikes, membrane, traces
 export diagnostics, ensemble_diagnostics
 export reset!, free!
 export LiquidCortexValidationError, ETA, MAX_INHIBITION
-export run_lsm_step, run_lsm_step_str, REF_N, REF_IN_DEFAULT, REF_OUT_DEFAULT
+export run_lsm_step, run_lsm_step_str, run_lsm_step!, ReferenceLSM
+export REF_N, REF_IN_DEFAULT, REF_OUT_DEFAULT
 
 # Warm method inference at install time. Do **not** construct SparseBrain or
 # EnsembleBrain here: each lobe is 65,536 neurons, `Pkg.test()` re-precompiles
