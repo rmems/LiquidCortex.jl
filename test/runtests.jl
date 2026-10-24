@@ -33,38 +33,30 @@ gpu_test_cfg(; N::Int=128, hist_depth::Int=8,
     BrainConfig(; N=N, hist_depth=hist_depth, rng=rng, kwargs...)
 
 function snapshot_reference_lsm_state()
-    # Copy reservoir state: run_lsm_step mutates _ref_x[] in-place.
-    x_snap = LiquidCortex._ref_x[]
+    lsm = LiquidCortex._default_ref_lsm[]
+    lsm === nothing && return nothing
     return (
-        W=LiquidCortex._ref_W[],
-        Win=LiquidCortex._ref_Win[],
-        Wout=LiquidCortex._ref_Wout[],
-        x=isnothing(x_snap) ? nothing : copy(x_snap),
-        n_in=LiquidCortex._ref_n_in[],
-        n_out=LiquidCortex._ref_n_out[],
-        initialized=LiquidCortex._ref_initialized[],
+        W=lsm.W,
+        Win=lsm.Win,
+        Wout=lsm.Wout,
+        x=copy(lsm.x),
+        n_in=lsm.n_in,
+        n_out=lsm.n_out,
     )
 end
 
 function clear_reference_lsm_state!()
-    LiquidCortex._ref_W[] = nothing
-    LiquidCortex._ref_Win[] = nothing
-    LiquidCortex._ref_Wout[] = nothing
-    LiquidCortex._ref_x[] = nothing
-    LiquidCortex._ref_n_in[] = LiquidCortex.REF_IN_DEFAULT
-    LiquidCortex._ref_n_out[] = LiquidCortex.REF_OUT_DEFAULT
-    LiquidCortex._ref_initialized[] = false
+    LiquidCortex._default_ref_lsm[] = nothing
     return nothing
 end
 
 function restore_reference_lsm_state!(state)
-    LiquidCortex._ref_W[] = state.W
-    LiquidCortex._ref_Win[] = state.Win
-    LiquidCortex._ref_Wout[] = state.Wout
-    LiquidCortex._ref_x[] = state.x
-    LiquidCortex._ref_n_in[] = state.n_in
-    LiquidCortex._ref_n_out[] = state.n_out
-    LiquidCortex._ref_initialized[] = state.initialized
+    if state === nothing
+        LiquidCortex._default_ref_lsm[] = nothing
+        return nothing
+    end
+    LiquidCortex._default_ref_lsm[] = LiquidCortex.ReferenceLSM(
+        state.W, state.Win, state.Wout, state.x)
     return nothing
 end
 
@@ -93,8 +85,8 @@ end
                     :diagnostics, :ensemble_diagnostics,
                     :reset!, :free!,
                     :LiquidCortexValidationError, :ETA, :MAX_INHIBITION,
-                    :run_lsm_step, :run_lsm_step_str,
-                    :REF_N, :REF_IN_DEFAULT, :REF_OUT_DEFAULT]
+                    :run_lsm_step, :run_lsm_step_str, :run_lsm_step!,
+                    :ReferenceLSM, :REF_N, :REF_IN_DEFAULT, :REF_OUT_DEFAULT]
             @test sym in exports
         end
         # Documented names resolve unqualified after `using LiquidCortex`.
@@ -103,6 +95,9 @@ end
         @test MAX_INHIBITION == 3.0f0
         @test REF_N == 2048
         @test run_lsm_step isa Function
+        @test run_lsm_step! isa Function
+        @test ReferenceLSM isa Type
+        @test hasmethod(run_lsm_step!, Tuple{ReferenceLSM, Vector{Float32}, Float32})
         @test compute_reservoir_covariance! === compute_reservoir_covariance
         @test parentmodule(step!) === LiquidCortex.CommonSolve
         @test hasmethod(reset!, Tuple{SparseBrain})
@@ -561,6 +556,111 @@ end
         # Guards run before GPU allocation, so these are CPU-safe.
         @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=0, n_out=4)
         @test_throws ArgumentError LiquidCortex._init_ref_lsm!(; n_in=4, n_out=0)
+        @test_throws ArgumentError ReferenceLSM(; n_in=0, n_out=4, N=8, gpu=false)
+        @test_throws ArgumentError ReferenceLSM(; n_in=4, n_out=0, N=8, gpu=false)
+        @test_throws ArgumentError ReferenceLSM(; n_in=4, n_out=2, N=0, gpu=false)
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 3), zeros(Float32, 4, 2),
+            zeros(Float32, 1, 4), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 3, 2),
+            zeros(Float32, 1, 4), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 2),
+            zeros(Float32, 1, 3), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 2),
+            zeros(Float32, 1, 4), zeros(Float32, 3))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 0),
+            zeros(Float32, 1, 4), zeros(Float32, 4))
+        @test_throws ArgumentError ReferenceLSM(
+            zeros(Float32, 4, 4), zeros(Float32, 4, 2),
+            zeros(Float32, 0, 4), zeros(Float32, 4))
+    end
+
+    @testset "CPU: Reference LSM instances do not share state" begin
+        # Two reservoirs with the same seed start equal, but each owns its
+        # arrays — stepping one must not move the other. Same seed + same
+        # inputs must also be deterministic (host arrays; no CUDA).
+        make() = ReferenceLSM(; n_in=3, n_out=2, N=8,
+            rng=Random.Xoshiro(20261020), gpu=false)
+        a = make()
+        b = make()
+        @test a.W == b.W
+        @test a.Win == b.Win
+        @test a.Wout == b.Wout
+        @test a.x == b.x
+        @test a.W !== b.W
+        @test a.Win !== b.Win
+        @test a.Wout !== b.Wout
+        @test a.x !== b.x
+
+        u = Float32[0.25, -0.5, 0.75]
+        x_b0 = copy(b.x)
+        W_b0 = copy(b.W)
+        ya = run_lsm_step!(a, u, 0.25f0)
+        @test b.x == x_b0
+        @test b.W == W_b0
+        @test a.x != b.x
+
+        yb = run_lsm_step!(b, u, 0.25f0)
+        @test ya == yb
+        @test a.x == b.x
+
+        run_lsm_step!(a, Float32[1.0, 0.0, -1.0], 0.0f0)
+        @test a.x != b.x
+        @test b.W == W_b0
+
+        other = ReferenceLSM(; n_in=3, n_out=2, N=8,
+            rng=Random.Xoshiro(20261021), gpu=false)
+        @test other.W != a.W
+
+        s = run_lsm_step_str(b, u, 0.25f0)
+        @test s isa String
+        @test length(split(s, ",")) == 2
+        @test occursin("ReferenceLSM", sprint(show, a))
+
+        y_f64 = run_lsm_step!(a, Float64[0.1, 0.2, 0.3], 0.0)
+        @test y_f64 isa Vector{Float32}
+        @test length(y_f64) == 2
+        @test_throws DimensionMismatch run_lsm_step!(a, Float32[0.0, 0.0], 0.0f0)
+    end
+
+    @testset "CPU: deprecated default-instance accessors" begin
+        original_state = snapshot_reference_lsm_state()
+        try
+            clear_reference_lsm_state!()
+            @test LiquidCortex._ref_W[] === nothing
+            @test LiquidCortex._ref_n_in[] == LiquidCortex.REF_IN_DEFAULT
+            @test LiquidCortex._ref_initialized[] == false
+            @test_throws ErrorException (LiquidCortex._ref_n_in[] = 8)
+
+            host = ReferenceLSM(; n_in=3, n_out=2, N=4,
+                rng=Random.Xoshiro(1), gpu=false)
+            LiquidCortex._default_ref_lsm[] = host
+            @test LiquidCortex._ref_initialized[] == true
+            @test LiquidCortex._ref_n_in[] == 3
+            @test LiquidCortex._ref_n_out[] == 2
+            @test LiquidCortex._ref_W[] === host.W
+            LiquidCortex._ref_n_in[] = 9
+            @test host.n_in == 9
+            LiquidCortex._ref_Win[] = nothing
+            @test LiquidCortex._default_ref_lsm[] === nothing
+            LiquidCortex._default_ref_lsm[] = host
+            LiquidCortex._ref_W[] = nothing
+            @test LiquidCortex._default_ref_lsm[] === nothing
+
+            host2 = ReferenceLSM(; n_in=3, n_out=2, N=4,
+                rng=Random.Xoshiro(2), gpu=false)
+            LiquidCortex._default_ref_lsm[] = host2
+            LiquidCortex._ref_initialized[] = false
+            @test LiquidCortex._default_ref_lsm[] === nothing
+            LiquidCortex._ref_initialized[] = true
+            @test LiquidCortex._default_ref_lsm[] === nothing
+        finally
+            restore_reference_lsm_state!(original_state)
+        end
     end
 
     # Reference LSM (2,048-neuron dense reservoir). GPU-only; skip cleanly on CPU.
@@ -577,11 +677,12 @@ end
                     output = run_lsm_step(input, 0.5f0)
                     @test LiquidCortex._ref_is_initialized()
                     @test length(output) == LiquidCortex.REF_OUT_DEFAULT
-                    @test size(LiquidCortex._ref_Win[]) == (
+                    default = LiquidCortex._default_ref_lsm[]
+                    @test size(default.Win) == (
                         LiquidCortex.REF_N,
                         LiquidCortex.REF_IN_DEFAULT,
                     )
-                    @test size(LiquidCortex._ref_Wout[]) == (
+                    @test size(default.Wout) == (
                         LiquidCortex.REF_OUT_DEFAULT,
                         LiquidCortex.REF_N,
                     )
@@ -597,10 +698,11 @@ end
                     input = zeros(Float32, 8)
                     output = run_lsm_step(input, 0.0f0; n_out=4)
                     @test length(output) == 4
-                    @test LiquidCortex._ref_n_in[] == 8
-                    @test LiquidCortex._ref_n_out[] == 4
-                    @test size(LiquidCortex._ref_Win[]) == (LiquidCortex.REF_N, 8)
-                    @test size(LiquidCortex._ref_Wout[]) == (4, LiquidCortex.REF_N)
+                    default = LiquidCortex._default_ref_lsm[]
+                    @test default.n_in == 8
+                    @test default.n_out == 4
+                    @test size(default.Win) == (LiquidCortex.REF_N, 8)
+                    @test size(default.Wout) == (4, LiquidCortex.REF_N)
                 finally
                     restore_reference_lsm_state!(original_state)
                 end
@@ -635,6 +737,21 @@ end
                 finally
                     restore_reference_lsm_state!(original_state)
                 end
+            end
+
+            @testset "Independent GPU instances" begin
+                make() = ReferenceLSM(; n_in=4, n_out=2, N=32,
+                    rng=Random.Xoshiro(20261020), gpu=true)
+                a = make()
+                b = make()
+                @test Array(a.W) == Array(b.W)
+                @test a.W !== b.W
+                u = Float32[0.2, -0.1, 0.3, 0.05]
+                ya = run_lsm_step!(a, u, 0.1f0)
+                @test Array(b.x) == zeros(Float32, 32)
+                yb = run_lsm_step!(b, u, 0.1f0)
+                @test ya == yb
+                @test Array(a.x) == Array(b.x)
             end
         else
             @info "Skipping reference LSM GPU tests — no CUDA device"
