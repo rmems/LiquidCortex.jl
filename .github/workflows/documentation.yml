@@ -22,9 +22,13 @@ permissions:
 
 jobs:
   docs:
-    name: Build docs
+    name: Build docs (${{ matrix.os }})
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,6 +39,10 @@ jobs:
         uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: '1.13'
+
+      # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
+      - name: Require Julia 1.13.2 or newer 1.13
+        run: julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
@@ -69,6 +77,10 @@ jobs:
         uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: '1.13'
+
+      # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
+      - name: Require Julia 1.13.2 or newer 1.13
+        run: julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
