@@ -82,7 +82,9 @@ remains the dense small-scale path.
 | `compute_reservoir_covariance!(brain)` | Compute subsampled covariance matrix |
 | `diagnostics(brain)` | Return diagnostic string |
 | `ensemble_diagnostics(eb)` | Per-lobe diagnostic summary |
-| `run_lsm_step(u, inhibit)` | Step the 2,048-neuron dense reference LSM (host `Vector{Float32}`) |
+| `ReferenceLSM(; n_in, n_out, N, rng, gpu)` | Isolated dense reference reservoir (default `N=2048`) |
+| `run_lsm_step!(lsm, u, inhibit)` | Step a `ReferenceLSM` (host `Vector{Float32}`) |
+| `run_lsm_step(u, inhibit)` | Step the process-wide default reference LSM (host `Vector{Float32}`) |
 | `LiquidCortexValidationError` | Thrown on API misuse (`step!` kwargs / input size) |
 | `ETA` / `MAX_INHIBITION` | Default `reflex_eta` (`0.001`) and inhibition clamp (`3`) |
 | `reset!(brain)` / `reset!(eb)` | Rewind neuron state; keep weights for another trial |

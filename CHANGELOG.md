@@ -15,6 +15,14 @@ change under `0.2.0`.
 
 ### Added
 
+- `ReferenceLSM` owns reference-reservoir weights and membrane state. Two
+  instances do not share arrays; construction is deterministic given `rng`.
+  `run_lsm_step!` steps an instance. `run_lsm_step` / `run_lsm_step_str` /
+  `_init_ref_lsm!` still use a process-wide default GPU instance.
+- Deprecated `_ref_W` / `_ref_Win` / `_ref_Wout` / `_ref_x` / `_ref_n_in` /
+  `_ref_n_out` / `_ref_initialized` accessors (they now wrap the default
+  instance).
+
 - `BrainConfig` for reservoir size, connectivity, spectral radius, LIF/STDP
   knobs, and a host RNG. `SparseBrain` and `EnsembleBrain` take `cfg`;
   `tau_m` accepts any `Real`.

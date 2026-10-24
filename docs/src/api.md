@@ -22,6 +22,8 @@ membrane
 traces
 diagnostics
 ensemble_diagnostics
+ReferenceLSM
 run_lsm_step
+run_lsm_step!
 run_lsm_step_str
 ```
