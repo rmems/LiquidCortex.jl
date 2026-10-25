@@ -421,6 +421,19 @@ end
         @test_throws ArgumentError estimate_spectral_radius(A; rel_tol=-1)
         @test_throws ArgumentError estimate_spectral_radius(A; krylov_dim=1)
         @test_throws ArgumentError estimate_spectral_radius(Float32[1 NaN; 0 1])
+        # Forced non-convergence: ArnoldiMethod returns no Ritz value, so the
+        # fallbacks must warn and return a finite estimate instead of throwing
+        # (this is the SparseBrain constructor path at default N).
+        W_nc = sprand(Random.Xoshiro(9), 300, 300, 0.05,
+            (r, len) -> Float16.(randn(r, Float32, len) .* 0.02f0))
+        dropzeros!(W_nc)
+        rho_nc = @test_logs (:warn, r"not converged") match_mode = :any estimate_spectral_radius(
+            W_nc; max_iters=1, krylov_dim=2, rel_tol=1f-12, rng=Random.Xoshiro(1))
+        @test rho_nc isa Float32
+        @test isfinite(rho_nc) && rho_nc > 0
+        # Still in the right ballpark: a 2-vector Krylov cycle is crude, but the
+        # value must be a genuine Ritz value of W, not a placeholder.
+        @test 0.1 * exact_rho(W_nc) < rho_nc < 2 * exact_rho(W_nc)
         # Operand widening is defined for every supported input family and
         # dispatch is unambiguous (a dense CuMatrix must not hit two methods).
         @test isempty(Test.detect_ambiguities(LiquidCortex))

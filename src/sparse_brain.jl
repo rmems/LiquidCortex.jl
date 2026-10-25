@@ -34,7 +34,8 @@ const COV_SUBSAMPLE = 8192          # Subsampled neurons for tractable covarianc
 const SPECTRAL_RADIUS = 0.9f0       # Target spectral radius ρ(W) of the recurrent matrix
 const RHO_MAX_RESTARTS = 500        # Implicit Arnoldi restarts for the ρ(W) estimate
 const RHO_KRYLOV_DIM = 80           # Krylov basis vectors per restart cycle
-const RHO_REL_TOL = 1.0f-6          # Ritz residual tolerance ‖Wx − λx‖ ≤ rel_tol·|λ| (floored at ε‖H‖)
+const RHO_REL_TOL = 1.0f-4          # Ritz residual tolerance ‖Wx − λx‖ ≤ rel_tol·|λ| (floored at ε‖H‖)
+const RHO_REL_TOL_RETRY = 1.0f-2    # Looser tolerance tried once when the first run does not converge
 
 # ── Lobe time constants (membrane τ_m in ms) ─────────────────────────────────
 const LOBE_TAUS = Float32[10.0, 25.0, 50.0, 100.0]
@@ -287,9 +288,12 @@ with poorly separated edge eigenvalues; an unrestarted Krylov iteration
 with a plateau stop under-estimates ρ by several percent at `N = 65_536`
 (review of GH #53 PR). Restarts with a residual criterion remove that bias.
 
-`rng` seeds the start vector. If the iteration has not converged after
-`max_iters` restarts a warning is emitted and the best Ritz value is
-returned. Returns `0f0` for an empty or all-zero matrix.
+`rng` seeds the start vector. If no Ritz pair converges within `max_iters`
+restarts the run is retried once at `max(RHO_REL_TOL_RETRY, 10·rel_tol)`, and
+failing that the best Ritz value of a single `krylov_dim`-vector Krylov cycle
+is returned; both fallbacks emit a `@warn` saying which one was used, and the
+function never throws for lack of convergence. Returns `0f0` for an empty or
+all-zero matrix.
 
 Accepts host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and
 `CuMatrix` (device inputs are copied to the host).
@@ -317,12 +321,35 @@ function estimate_spectral_radius(W::AbstractMatrix;
     maxdim = min(Int(krylov_dim), n)
     mindim = min(max(2, maxdim ÷ 2), maxdim)
     v1 = randn(rng, Float32, n)
+    tol = Float32(rel_tol)
+    rho = _partialschur_rho(A, v1, tol, mindim, maxdim, Int(max_iters))
+    rho === nothing || return rho
+    # ArnoldiMethod 0.4 returns only *converged* Ritz values, so a run that
+    # exhausts `restarts` yields an empty spectrum. Retry once at a looser
+    # tolerance (still far inside the constructor's 5 % check) before falling
+    # back to the best Ritz value of a single `maxdim` Krylov cycle, which a
+    # non-finite tolerance always accepts.
+    retry_tol = max(RHO_REL_TOL_RETRY, 10 * tol)
+    rho = _partialschur_rho(A, v1, retry_tol, mindim, maxdim, Int(max_iters))
+    if rho !== nothing
+        @warn "estimate_spectral_radius: not converged at rel_tol=$tol after $max_iters restarts; converged at rel_tol=$retry_tol" krylov_dim = maxdim
+        return rho
+    end
+    rho = _partialschur_rho(A, v1, floatmax(Float32), mindim, maxdim, 1)
+    rho === nothing && throw(ArgumentError(
+        "estimate_spectral_radius: Arnoldi returned no Ritz value even for a single Krylov cycle"))
+    @warn "estimate_spectral_radius: not converged at rel_tol=$tol or $retry_tol after $max_iters restarts; returning the best Ritz value of one $maxdim-vector Krylov cycle (unconverged estimate)" krylov_dim = maxdim
+    return rho
+end
+
+# One `partialschur` run. Returns `nothing` when no Ritz pair converged
+# (ArnoldiMethod reports only converged values), else max |λ| as Float32.
+function _partialschur_rho(A, v1::Vector{Float32}, tol::Float32, mindim::Int, maxdim::Int,
+                           restarts::Int)
     decomp, history = ArnoldiMethod.partialschur(A;
-        v1=v1, nev=1, which=:LM, tol=Float32(rel_tol),
-        mindim=mindim, maxdim=maxdim, restarts=Int(max_iters))
-    history.converged || @warn "estimate_spectral_radius did not converge; returning best Ritz value" restarts = max_iters krylov_dim = maxdim
-    isempty(decomp.eigenvalues) && throw(ArgumentError(
-        "estimate_spectral_radius: Arnoldi returned no Ritz value"))
+        v1=copy(v1), nev=1, which=:LM, tol=tol,
+        mindim=mindim, maxdim=maxdim, restarts=restarts)
+    (history.converged && !isempty(decomp.eigenvalues)) || return nothing
     return Float32(maximum(abs, decomp.eigenvalues))
 end
 
