@@ -20,6 +20,7 @@ compute_reservoir_covariance!
 spikes
 membrane
 traces
+estimate_spectral_radius
 diagnostics
 ensemble_diagnostics
 ReferenceLSM

@@ -3,7 +3,7 @@
 using Test
 using LiquidCortex
 using CUDA
-using LinearAlgebra: norm
+using LinearAlgebra: norm, eigvals
 using Random
 using SparseArrays
 
@@ -331,32 +331,36 @@ end
             cfg.refrac_t, cfg.tau_trace, cfg.w_max, cfg.inhibition_gain,
             cfg.max_inhibition, cfg.rng)
 
-        W1 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+        W1, rho1 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
             N=64, conn_prob=0.05, rng=Random.Xoshiro(42)))
         rand()  # pollute the global / task-local RNG
-        W2 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+        W2, rho2 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
             N=64, conn_prob=0.05, rng=Random.Xoshiro(42)))
         @test W1 == W2
+        @test rho1 == rho2
         @test size(W1) == (64, 64)
         @test W1 isa SparseMatrixCSC
         @test all(i -> W1[i, i] == Float16(0), 1:64)
 
-        W3 = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+        W3, _ = LiquidCortex._generate_recurrent_cpu(BrainConfig(
             N=64, conn_prob=0.05, rng=Random.Xoshiro(43)))
         @test W3 != W1
 
-        emptyW = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+        emptyW, rho_empty = LiquidCortex._generate_recurrent_cpu(BrainConfig(
             N=16, conn_prob=0.0, rng=Random.Xoshiro(1)))
         @test nnz(emptyW) == 0
         @test size(emptyW) == (16, 16)
-        oneW = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+        @test rho_empty == 0.0f0
+        oneW, rho_one = LiquidCortex._generate_recurrent_cpu(BrainConfig(
             N=1, conn_prob=1.0, rng=Random.Xoshiro(1)))
         @test nnz(oneW) == 0
+        @test rho_one == 0.0f0
         @test !any(isnan, nonzeros(oneW))
-        fullW = LiquidCortex._generate_recurrent_cpu(BrainConfig(
+        fullW, rho_full = LiquidCortex._generate_recurrent_cpu(BrainConfig(
             N=20, conn_prob=1.0, rng=Random.Xoshiro(1)))
         @test nnz(fullW) == 20 * 19
         @test all(isfinite, nonzeros(fullW))
+        @test isapprox(rho_full, LiquidCortex.SPECTRAL_RADIUS; rtol=0.05)
         @test LiquidCortex._uses_device_rng(Random.Xoshiro(1)) == false
         @test LiquidCortex._uses_device_rng(Random.default_rng()) == false
 
@@ -371,6 +375,73 @@ end
         @test LiquidCortex._fast_lobe_index(Float32[100, 10, 50]) == 2
         @test LiquidCortex._lobe_reflex_eta(2, 0.001f0, 0.005f0, 2) == 0.005f0
         @test LiquidCortex._lobe_reflex_eta(1, 0.001f0, 0.005f0, 2) == 0.001f0
+    end
+
+    @testset "CPU: spectral radius is measured, not assumed (GH #53)" begin
+        exact_rho(W) = maximum(abs, eigvals(Matrix{Float64}(W)))
+
+        # Estimator vs exact eigenvalues on the raw (unscaled) init matrix.
+        rng = Random.Xoshiro(7)
+        for n in (300, 1200)
+            W_raw = sprand(rng, n, n, 0.01,
+                (r, len) -> Float16.(randn(r, Float32, len) .* 0.02f0))
+            for i in 1:n
+                W_raw[i, i] = Float16(0)
+            end
+            dropzeros!(W_raw)
+            exact = exact_rho(W_raw)
+            est = estimate_spectral_radius(W_raw; rng=Random.Xoshiro(1))
+            @test est isa Float32
+            @test isapprox(est, exact; rtol=0.02)
+            # The old estimator, for reference: RMS of the nonzeros, ≈ 0.02,
+            # whatever ρ really is.
+            rms = norm(W_raw) / sqrt(nnz(W_raw))
+            @test isapprox(rms, 0.02; rtol=0.1)
+            # Sparse circular law: ρ ≈ s·√k_eff, so the old scale was off by
+            # √(mean degree) — ~1.7× here at N=300, ~3.5× at N=1200, 25× shipped.
+            k_eff = nnz(W_raw) / n
+            @test isapprox(exact, rms * sqrt(k_eff); rtol=0.25)
+            @test exact > 1.5 * rms
+        end
+
+        # Dense + exact-eigvals sanity: symmetric and non-normal cases.
+        A = Float32[2 0; 0 -3]
+        @test isapprox(estimate_spectral_radius(A; rng=Random.Xoshiro(1)), 3.0f0; rtol=1e-3)
+        B = Float32[0 1; -1 0]   # eigenvalues ±i, |λ| = 1
+        @test isapprox(estimate_spectral_radius(B; rng=Random.Xoshiro(1)), 1.0f0; rtol=1e-3)
+        @test estimate_spectral_radius(zeros(Float32, 4, 4)) == 0.0f0
+        @test estimate_spectral_radius(zeros(Float32, 0, 0)) == 0.0f0
+        @test_throws ArgumentError estimate_spectral_radius(zeros(Float32, 2, 3))
+        @test_throws ArgumentError estimate_spectral_radius(A; max_iters=0)
+        @test_throws ArgumentError estimate_spectral_radius(A; rel_tol=-1)
+
+        # The shipped constructor path: the matrix the lobe would receive has
+        # measured ρ ≈ target, and the returned measurement matches eigvals.
+        for (n, target) in ((500, 0.9f0), (1500, 0.9f0), (1500, 0.5f0))
+            cfg = BrainConfig(N=n, conn_prob=0.01, spectral_radius=target,
+                rng=Random.Xoshiro(3))
+            W, rho_measured = LiquidCortex._generate_recurrent_cpu(cfg)
+            @test W isa SparseMatrixCSC{Float16}
+            exact = exact_rho(W)
+            @test isapprox(exact, target; rtol=0.05)
+            @test isapprox(rho_measured, exact; rtol=0.02)
+            # Entries are no longer forced to RMS ≈ target.
+            @test norm(W) / sqrt(nnz(W)) < 0.5 * target
+        end
+
+        # Scaling helper directly on a small random sparse matrix.
+        W_small = sprand(Random.Xoshiro(11), 400, 400, 0.02,
+            (r, len) -> Float16.(randn(r, Float32, len) .* 0.02f0))
+        dropzeros!(W_small)
+        before = exact_rho(W_small)
+        Ws, rho_b, rho_a = LiquidCortex._scale_to_spectral_radius!(W_small, 0.7f0;
+            rng=Random.Xoshiro(2))
+        @test Ws === W_small
+        @test isapprox(rho_b, before; rtol=0.02)
+        @test isapprox(exact_rho(W_small), 0.7f0; rtol=0.05)
+        @test isapprox(rho_a, 0.7f0; rtol=0.05)
+        emptyS = spzeros(Float16, 8, 8)
+        @test LiquidCortex._scale_to_spectral_radius!(emptyS, 0.9f0) == (emptyS, 0.0f0, 0.0f0)
     end
 
     @testset "CPU: CUDA availability matches CUDA.functional" begin
@@ -828,6 +899,20 @@ end
             plain = sprint(show, MIME"text/plain"(), brain)
             @test occursin("neurons: 128", plain)
             @test !occursin("neurons: $(LiquidCortex.N)", plain)
+            @test occursin("spectral radius: measured", plain)
+            free!(brain); reclaim_gpu!()
+        end
+
+        @testset "GPU: SparseBrain ships at the measured spectral radius (GH #53)" begin
+            cfg = gpu_test_cfg(; N=1024, conn_prob=0.02, spectral_radius=0.8f0)
+            brain = SparseBrain(20.0f0; n_in=8, n_out=4, name="rho", cfg=cfg)
+            @test isapprox(brain.spectral_radius_measured, 0.8f0; rtol=0.05)
+            W_host = SparseMatrixCSC(brain.W)
+            exact = maximum(abs, eigvals(Matrix{Float64}(W_host)))
+            @test isapprox(exact, 0.8f0; rtol=0.05)
+            # Device-side estimate on the CuSparse CSC agrees with eigvals.
+            est_dev = estimate_spectral_radius(brain.W; rng=Random.Xoshiro(1))
+            @test isapprox(est_dev, exact; rtol=0.02)
             free!(brain); reclaim_gpu!()
         end
 
