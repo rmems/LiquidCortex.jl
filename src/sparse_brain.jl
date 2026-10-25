@@ -22,6 +22,7 @@ using LinearAlgebra
 using Statistics
 using Random
 using Printf
+using ArnoldiMethod: ArnoldiMethod
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -31,8 +32,9 @@ const DT = 1.0f0         # Simulation timestep (normalized to tick interval)
 const HIST_DEPTH = 1000          # Rolling history depth (ticks) for deep temporal covariance
 const COV_SUBSAMPLE = 8192          # Subsampled neurons for tractable covariance (avoids 17 GB N×N)
 const SPECTRAL_RADIUS = 0.9f0       # Target spectral radius ρ(W) of the recurrent matrix
-const RHO_MAX_ITERS = 100           # Krylov (Arnoldi) steps for the ρ(W) estimate
-const RHO_REL_TOL = 1.0f-3          # Relative Ritz-value change that stops the estimate
+const RHO_MAX_RESTARTS = 500        # Implicit Arnoldi restarts for the ρ(W) estimate
+const RHO_KRYLOV_DIM = 80           # Krylov basis vectors per restart cycle
+const RHO_REL_TOL = 1.0f-6          # Ritz residual tolerance ‖Wx − λx‖ ≤ rel_tol·|λ| (floored at ε‖H‖)
 
 # ── Lobe time constants (membrane τ_m in ms) ─────────────────────────────────
 const LOBE_TAUS = Float32[10.0, 25.0, 50.0, 100.0]
@@ -260,85 +262,72 @@ function cpu_randn_cu(rng::AbstractRNG, dims::Integer...)
 end
 cpu_randn_cu(dims::Integer...) = cpu_randn_cu(Random.default_rng(), dims...)
 
-# Dense Float32 work vectors on the same device as `W`.
-_krylov_vector(::AbstractMatrix, n::Int) = Vector{Float32}(undef, n)
-_krylov_vector(::CUDA.CUSPARSE.AbstractCuSparseMatrix, n::Int) = CUDA.zeros(Float32, n)
-_krylov_vector(::CuArray, n::Int) = CUDA.zeros(Float32, n)
+# The estimator always runs on the host in Float32. A Float16 reservoir is
+# widened (Float16 Krylov vectors would lose the ρ estimate to rounding), and a
+# device matrix is downloaded once: cuSPARSE has no mixed Float16×Float32 SpMV
+# and ArnoldiMethod.jl allocates its Krylov basis on the host anyway. At the
+# shipped size this is ~42 M nnz × (4 B value + 4 B row index) ≈ 340 MB.
+_estimator_operand(W::SparseMatrixCSC) = SparseMatrixCSC{Float32,Int32}(W)
+_estimator_operand(W::AbstractMatrix) = Matrix{Float32}(W)
+_estimator_operand(W::CUDA.CUSPARSE.AbstractCuSparseMatrix) = _estimator_operand(SparseMatrixCSC(W))
+_estimator_operand(W::CuArray) = Matrix{Float32}(Array(W))
 
 """
-    estimate_spectral_radius(W; max_iters=RHO_MAX_ITERS, rel_tol=RHO_REL_TOL, rng) -> Float32
+    estimate_spectral_radius(W; max_iters=RHO_MAX_RESTARTS, rel_tol=RHO_REL_TOL, rng, krylov_dim=RHO_KRYLOV_DIM) -> Float32
 
-Estimate the spectral radius ρ(W) = max |λ| of a square matrix `W` with a
-restart-free Arnoldi (Krylov) iteration. Matrix–vector products run in
-`Float32` (Float16 entries are widened on the fly), the small Hessenberg
-matrix is kept in `Float64`, and the result is the largest-magnitude Ritz
-value. Iteration stops after `max_iters` steps, when the Krylov subspace is
-exhausted, or once the Ritz estimate changes by less than `rel_tol` on three
-consecutive steps.
+Estimate the spectral radius ρ(W) = max |λ| of a square matrix `W` with
+implicitly restarted Arnoldi (ArnoldiMethod.jl `partialschur`, `nev=1`,
+`which=:LM`). The matrix is widened to a host `Float32` operand first (see
+`_estimator_operand`); the Krylov subspace holds at most `krylov_dim`
+vectors and is restarted up to `max_iters` times until the Ritz pair
+satisfies ‖W x − λ x‖ ≤ max(ε‖H‖, rel_tol·|λ|).
 
-Random, non-symmetric sparse matrices have an almost circular spectrum, so a
-plain power iteration converges slowly; Arnoldi resolves the dominant
-eigenvalue to well under 1 % relative error in a few dozen steps for the
-sizes used here.
+Random, non-symmetric sparse matrices have an almost circular spectrum
+with poorly separated edge eigenvalues; an unrestarted Krylov iteration
+with a plateau stop under-estimates ρ by several percent at `N = 65_536`
+(review of GH #53 PR). Restarts with a residual criterion remove that bias.
 
-Works on any `AbstractMatrix` whose `mul!` with a dense `Float32` vector is
-defined (host `SparseMatrixCSC`, `CuSparseMatrixCSC`, dense). Returns `0f0`
-for an empty or all-zero matrix.
+`rng` seeds the start vector. If the iteration has not converged after
+`max_iters` restarts a warning is emitted and the best Ritz value is
+returned. Returns `0f0` for an empty or all-zero matrix.
+
+Accepts host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and
+`CuMatrix` (device inputs are copied to the host).
 """
 function estimate_spectral_radius(W::AbstractMatrix;
-    max_iters::Integer=RHO_MAX_ITERS,
+    max_iters::Integer=RHO_MAX_RESTARTS,
     rel_tol::Real=RHO_REL_TOL,
-    rng::AbstractRNG=Random.default_rng())
+    rng::AbstractRNG=Random.default_rng(),
+    krylov_dim::Integer=RHO_KRYLOV_DIM)
     n = size(W, 1)
     size(W, 2) == n || throw(ArgumentError(
         "estimate_spectral_radius needs a square matrix, got $(size(W))"))
     max_iters >= 1 || throw(ArgumentError("max_iters must be ≥ 1, got $max_iters"))
     (isfinite(rel_tol) && rel_tol >= 0) || throw(ArgumentError(
         "rel_tol must be finite and ≥ 0, got $rel_tol"))
+    krylov_dim >= 2 || throw(ArgumentError("krylov_dim must be ≥ 2, got $krylov_dim"))
     n == 0 && return 0.0f0
-    m = min(Int(max_iters), n)
-    # Krylov basis lives where `W` lives (host or device); the Hessenberg
-    # matrix is tiny and stays on the host in Float64.
-    v0 = randn(rng, Float32, n)
-    V = [_krylov_vector(W, n) for _ in 1:(m + 1)]
-    copyto!(V[1], v0)
-    nrm0 = norm(V[1])
-    nrm0 > 0 || return 0.0f0
-    V[1] ./= nrm0
-    H = zeros(Float64, m + 1, m)
-    w = _krylov_vector(W, n)
-    rho_prev = -1.0
-    stable = 0
-    k = 0
-    @inbounds for j in 1:m
-        mul!(w, W, V[j])
-        all(isfinite, w) || throw(ArgumentError(
-            "estimate_spectral_radius: non-finite matvec at Krylov step $j"))
-        # Two passes of modified Gram–Schmidt (the second repairs Float32
-        # cancellation in the first).
-        for _ in 1:2
-            for i in 1:j
-                h = Float64(dot(V[i], w))
-                H[i, j] += h
-                w .-= Float32(h) .* V[i]
-            end
-        end
-        β = Float64(norm(w))
-        H[j + 1, j] = β
-        k = j
-        rho = maximum(abs, eigvals(@view H[1:k, 1:k]))
-        if rho_prev >= 0 && abs(rho - rho_prev) <= rel_tol * max(rho, eps(Float64))
-            stable += 1
-        else
-            stable = 0
-        end
-        rho_prev = rho
-        # Exhausted subspace (exact invariant Krylov space) or converged.
-        (β <= 1.0e-7 * max(rho, 1.0) || stable >= 3) && break
-        V[j + 1] .= w ./ Float32(β)
+    A = _estimator_operand(W)
+    all(isfinite, _nonzero_values(A)) || throw(ArgumentError(
+        "estimate_spectral_radius: matrix has non-finite entries"))
+    iszero(_nonzero_values(A)) && return 0.0f0
+    if n == 1
+        return Float32(abs(A[1, 1]))
     end
-    return Float32(rho_prev)
+    maxdim = min(Int(krylov_dim), n)
+    mindim = min(max(2, maxdim ÷ 2), maxdim)
+    v1 = randn(rng, Float32, n)
+    decomp, history = ArnoldiMethod.partialschur(A;
+        v1=v1, nev=1, which=:LM, tol=Float32(rel_tol),
+        mindim=mindim, maxdim=maxdim, restarts=Int(max_iters))
+    history.converged || @warn "estimate_spectral_radius did not converge; returning best Ritz value" restarts = max_iters krylov_dim = maxdim
+    isempty(decomp.eigenvalues) && throw(ArgumentError(
+        "estimate_spectral_radius: Arnoldi returned no Ritz value"))
+    return Float32(maximum(abs, decomp.eigenvalues))
 end
+
+_nonzero_values(A::SparseMatrixCSC) = nonzeros(A)
+_nonzero_values(A::AbstractMatrix) = A
 
 """
     _scale_to_spectral_radius!(W_cpu, target; rng) -> (W_cpu, rho_before, rho_after)
@@ -355,11 +344,12 @@ function _scale_to_spectral_radius!(W_cpu::SparseMatrixCSC{Float16}, target::Flo
     rho_before = estimate_spectral_radius(W_cpu; rng=rng)
     (rho_before > 0 && isfinite(rho_before)) || return W_cpu, rho_before, rho_before
     scale_factor = Float32(target) / rho_before
-    # Guard only: scaling below stays in Float32 and rounds each entry once.
-    isfinite(Float16(scale_factor)) || throw(ArgumentError(
-        "recurrent Float16 scale overflowed (scale=$scale_factor, measured ρ=$rho_before, target ρ=$target)"))
-    # Scale in Float32 and round once, instead of multiplying Float16×Float16.
     nz = nonzeros(W_cpu)
+    # Only the *scaled weights* must fit Float16; the scale itself may exceed it.
+    w_peak = Float32(maximum(abs, nz)) * scale_factor
+    w_peak <= floatmax(Float16) || throw(ArgumentError(
+        "recurrent Float16 overflow: max |w| after scaling = $w_peak (scale=$scale_factor, measured ρ=$rho_before, target ρ=$target)"))
+    # Scale in Float32 and round once, instead of multiplying Float16×Float16.
     @inbounds for i in eachindex(nz)
         nz[i] = Float16(Float32(nz[i]) * scale_factor)
     end

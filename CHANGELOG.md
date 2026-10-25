@@ -52,12 +52,15 @@ change under `0.2.0`.
   nonzeros (≈ the 0.02 init std), not a spectral radius — and then logged the
   target `0.9`. At the shipped `N=65_536`, `conn_prob=0.01` the reservoir
   actually had ρ ≈ 23 (sparse circular law ρ ≈ s·√k_eff). `W` is now rescaled
-  by a Krylov (Arnoldi) estimate of ρ computed in Float32 on the CSC, the
+  by an implicitly restarted Arnoldi estimate of ρ (new dependency
+  ArnoldiMethod.jl, `partialschur`, residual criterion) computed in Float32
+  on a host copy of the CSC, the
   value re-measured on the final Float16 matrix is stored in
   `brain.spectral_radius_measured`, logged at `@debug`, and a `@warn` fires if
   it is more than 5 % off `cfg.spectral_radius`. New exported helper
-  `estimate_spectral_radius(W; max_iters, rel_tol, rng)` works on host
-  `SparseMatrixCSC`, `CuSparseMatrixCSC`, and dense matrices.
+  `estimate_spectral_radius(W; max_iters, rel_tol, rng, krylov_dim)` works on
+  host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and `CuMatrix`
+  (device inputs are copied to the host).
   **Any result produced with earlier versions used a reservoir ~25× over the
   documented spectral radius and should be considered invalid.** Internal
   `_generate_recurrent_cpu(cfg)` now returns `(W, rho_measured)`.
