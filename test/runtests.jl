@@ -409,11 +409,61 @@ end
         @test isapprox(estimate_spectral_radius(A; rng=Random.Xoshiro(1)), 3.0f0; rtol=1e-3)
         B = Float32[0 1; -1 0]   # eigenvalues ±i, |λ| = 1
         @test isapprox(estimate_spectral_radius(B; rng=Random.Xoshiro(1)), 1.0f0; rtol=1e-3)
+        # Small-but-nonzero entries must not trip an absolute breakdown threshold.
+        tiny = Float32[1e-6 0; 0 -2e-6]
+        @test isapprox(estimate_spectral_radius(tiny; rng=Random.Xoshiro(1)), 2.0f-6; rtol=1e-3)
+        @test estimate_spectral_radius(fill(5.0f0, 1, 1)) == 5.0f0
         @test estimate_spectral_radius(zeros(Float32, 4, 4)) == 0.0f0
         @test estimate_spectral_radius(zeros(Float32, 0, 0)) == 0.0f0
+        @test estimate_spectral_radius(spzeros(Float16, 3, 3)) == 0.0f0
         @test_throws ArgumentError estimate_spectral_radius(zeros(Float32, 2, 3))
         @test_throws ArgumentError estimate_spectral_radius(A; max_iters=0)
         @test_throws ArgumentError estimate_spectral_radius(A; rel_tol=-1)
+        @test_throws ArgumentError estimate_spectral_radius(A; krylov_dim=1)
+        @test_throws ArgumentError estimate_spectral_radius(Float32[1 NaN; 0 1])
+        # Operand widening is defined for every supported input family and
+        # dispatch is unambiguous (a dense CuMatrix must not hit two methods).
+        @test isempty(Test.detect_ambiguities(LiquidCortex))
+        @test hasmethod(LiquidCortex._estimator_operand, Tuple{CuMatrix{Float32}})
+        @test hasmethod(LiquidCortex._estimator_operand,
+            Tuple{CUDA.CUSPARSE.CuSparseMatrixCSC{Float16,Int32}})
+        @test LiquidCortex._estimator_operand(sparse(Float16[1 0; 0 2])) isa SparseMatrixCSC{Float32,Int32}
+        @test LiquidCortex._estimator_operand(Float64[1 2; 3 4]) isa Matrix{Float32}
+
+        # Large sparse case, m ≪ N: the sparse circular law ρ ≈ s·√k_eff holds
+        # to a few percent at N=20_000, and the estimator must land on it
+        # without the plateau bias of an unrestarted iteration.
+        n_big = 20_000
+        W_big = sprand(Random.Xoshiro(21), n_big, n_big, 0.01,
+            (r, len) -> Float16.(randn(r, Float32, len) .* 0.02f0))
+        for i in 1:n_big
+            W_big[i, i] = Float16(0)
+        end
+        dropzeros!(W_big)
+        rms_big = norm(W_big) / sqrt(nnz(W_big))
+        circ = rms_big * sqrt(nnz(W_big) / n_big)
+        rho_big = estimate_spectral_radius(W_big; rng=Random.Xoshiro(1))
+        @test isapprox(rho_big, circ; rtol=0.02)
+        # Two different start vectors agree (no start-vector-dependent bias).
+        rho_big2 = estimate_spectral_radius(W_big; rng=Random.Xoshiro(2))
+        @test isapprox(rho_big, rho_big2; rtol=2e-3)
+        # Achieved ρ at large N is within 2 % of target, measured against the
+        # circular-law value of the rescaled matrix (not just the estimator).
+        W_scaled, rho_b, rho_a = LiquidCortex._scale_to_spectral_radius!(copy(W_big), 0.9f0;
+            rng=Random.Xoshiro(3))
+        @test isapprox(rho_b, circ; rtol=0.02)
+        @test isapprox(rho_a, 0.9f0; rtol=0.02)
+        circ_scaled = (norm(W_scaled) / sqrt(nnz(W_scaled))) * sqrt(nnz(W_scaled) / n_big)
+        @test isapprox(circ_scaled, 0.9f0; rtol=0.02)
+
+        # Float16 guard checks the scaled weights, not the scale factor.
+        W_tiny = sprand(Random.Xoshiro(5), 200, 200, 0.05,
+            (r, len) -> Float16.(randn(r, Float32, len) .* 1.0f-4))
+        dropzeros!(W_tiny)
+        Wt, _, rho_t = LiquidCortex._scale_to_spectral_radius!(W_tiny, 0.9f0; rng=Random.Xoshiro(1))
+        @test isapprox(rho_t, 0.9f0; rtol=0.05)   # scale ≫ 65504 is fine
+        W_ovf = sparse(Float16[0 4; 0.25 0])       # ρ = 1 but max |w| = 4 → 4·target
+        @test_throws ArgumentError LiquidCortex._scale_to_spectral_radius!(W_ovf, Float32(floatmax(Float16)))
 
         # The shipped constructor path: the matrix the lobe would receive has
         # measured ρ ≈ target, and the returned measurement matches eigvals.
