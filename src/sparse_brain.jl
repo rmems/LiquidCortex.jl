@@ -271,7 +271,7 @@ cpu_randn_cu(dims::Integer...) = cpu_randn_cu(Random.default_rng(), dims...)
 _estimator_operand(W::SparseMatrixCSC) = SparseMatrixCSC{Float32,Int32}(W)
 _estimator_operand(W::AbstractMatrix) = Matrix{Float32}(W)
 _estimator_operand(W::CUDA.CUSPARSE.AbstractCuSparseMatrix) = _estimator_operand(SparseMatrixCSC(W))
-_estimator_operand(W::CuArray) = Matrix{Float32}(Array(W))
+_estimator_operand(W::CuMatrix) = Matrix{Float32}(Array(W))
 
 """
     estimate_spectral_radius(W; max_iters=RHO_MAX_RESTARTS, rel_tol=RHO_REL_TOL, rng, krylov_dim=RHO_KRYLOV_DIM) -> Float32
@@ -291,9 +291,9 @@ with a plateau stop under-estimates ρ by several percent at `N = 65_536`
 `rng` seeds the start vector. If no Ritz pair converges within `max_iters`
 restarts the run is retried once at `max(RHO_REL_TOL_RETRY, 10·rel_tol)`, and
 failing that the best Ritz value of a single `krylov_dim`-vector Krylov cycle
-is returned; both fallbacks emit a `@warn` saying which one was used, and the
-function never throws for lack of convergence. Returns `0f0` for an empty or
-all-zero matrix.
+is returned; both fallbacks emit a `@warn` saying which one was used. An
+`ArgumentError` is thrown only if even that single cycle yields no Ritz
+value. Returns `0f0` for an empty or all-zero matrix.
 
 Accepts host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and
 `CuMatrix` (device inputs are copied to the host).
@@ -303,6 +303,20 @@ function estimate_spectral_radius(W::AbstractMatrix;
     rel_tol::Real=RHO_REL_TOL,
     rng::AbstractRNG=Random.default_rng(),
     krylov_dim::Integer=RHO_KRYLOV_DIM)
+    rho, _ = _estimate_spectral_radius(W; max_iters=max_iters, rel_tol=rel_tol,
+        rng=rng, krylov_dim=krylov_dim)
+    return rho
+end
+
+# Internal: also returns the converged Schur vector (or `nothing`) so a second
+# estimate on a rescaled copy of the same matrix can be warm-started with it
+# (`start` kwarg), which cuts the restart count to a handful.
+function _estimate_spectral_radius(W::AbstractMatrix;
+    max_iters::Integer=RHO_MAX_RESTARTS,
+    rel_tol::Real=RHO_REL_TOL,
+    rng::AbstractRNG=Random.default_rng(),
+    krylov_dim::Integer=RHO_KRYLOV_DIM,
+    start::Union{Nothing,AbstractVector}=nothing)
     n = size(W, 1)
     size(W, 2) == n || throw(ArgumentError(
         "estimate_spectral_radius needs a square matrix, got $(size(W))"))
@@ -310,47 +324,52 @@ function estimate_spectral_radius(W::AbstractMatrix;
     (isfinite(rel_tol) && rel_tol >= 0) || throw(ArgumentError(
         "rel_tol must be finite and ≥ 0, got $rel_tol"))
     krylov_dim >= 2 || throw(ArgumentError("krylov_dim must be ≥ 2, got $krylov_dim"))
-    n == 0 && return 0.0f0
+    n == 0 && return 0.0f0, nothing
     A = _estimator_operand(W)
     all(isfinite, _nonzero_values(A)) || throw(ArgumentError(
         "estimate_spectral_radius: matrix has non-finite entries"))
-    iszero(_nonzero_values(A)) && return 0.0f0
+    iszero(_nonzero_values(A)) && return 0.0f0, nothing
     if n == 1
-        return Float32(abs(A[1, 1]))
+        return Float32(abs(A[1, 1])), nothing
     end
     maxdim = min(Int(krylov_dim), n)
     mindim = min(max(2, maxdim ÷ 2), maxdim)
-    v1 = randn(rng, Float32, n)
+    v1 = if start === nothing || length(start) != n || !all(isfinite, start)
+        randn(rng, Float32, n)
+    else
+        Vector{Float32}(start)
+    end
     tol = Float32(rel_tol)
-    rho = _partialschur_rho(A, v1, tol, mindim, maxdim, Int(max_iters))
-    rho === nothing || return rho
+    res = _partialschur_rho(A, v1, tol, mindim, maxdim, Int(max_iters))
+    res === nothing || return res
     # ArnoldiMethod 0.4 returns only *converged* Ritz values, so a run that
     # exhausts `restarts` yields an empty spectrum. Retry once at a looser
     # tolerance (still far inside the constructor's 5 % check) before falling
     # back to the best Ritz value of a single `maxdim` Krylov cycle, which a
     # non-finite tolerance always accepts.
     retry_tol = max(RHO_REL_TOL_RETRY, 10 * tol)
-    rho = _partialschur_rho(A, v1, retry_tol, mindim, maxdim, Int(max_iters))
-    if rho !== nothing
+    res = _partialschur_rho(A, v1, retry_tol, mindim, maxdim, Int(max_iters))
+    if res !== nothing
         @warn "estimate_spectral_radius: not converged at rel_tol=$tol after $max_iters restarts; converged at rel_tol=$retry_tol" krylov_dim = maxdim
-        return rho
+        return res
     end
-    rho = _partialschur_rho(A, v1, floatmax(Float32), mindim, maxdim, 1)
-    rho === nothing && throw(ArgumentError(
+    res = _partialschur_rho(A, v1, floatmax(Float32), mindim, maxdim, 1)
+    res === nothing && throw(ArgumentError(
         "estimate_spectral_radius: Arnoldi returned no Ritz value even for a single Krylov cycle"))
     @warn "estimate_spectral_radius: not converged at rel_tol=$tol or $retry_tol after $max_iters restarts; returning the best Ritz value of one $maxdim-vector Krylov cycle (unconverged estimate)" krylov_dim = maxdim
-    return rho
+    return res
 end
 
 # One `partialschur` run. Returns `nothing` when no Ritz pair converged
-# (ArnoldiMethod reports only converged values), else max |λ| as Float32.
+# (ArnoldiMethod reports only converged values), else `(max |λ|, schur_vector)`
+# where the vector spans the dominant Schur direction (usable as a warm start).
 function _partialschur_rho(A, v1::Vector{Float32}, tol::Float32, mindim::Int, maxdim::Int,
                            restarts::Int)
     decomp, history = ArnoldiMethod.partialschur(A;
         v1=copy(v1), nev=1, which=:LM, tol=tol,
         mindim=mindim, maxdim=maxdim, restarts=restarts)
     (history.converged && !isempty(decomp.eigenvalues)) || return nothing
-    return Float32(maximum(abs, decomp.eigenvalues))
+    return Float32(maximum(abs, decomp.eigenvalues)), Vector{Float32}(real.(decomp.Q[:, 1]))
 end
 
 _nonzero_values(A::SparseMatrixCSC) = nonzeros(A)
@@ -368,7 +387,7 @@ unchanged with `(0, 0)` when it has no nonzeros or when ρ is not measurable.
 function _scale_to_spectral_radius!(W_cpu::SparseMatrixCSC{Float16}, target::Float32;
     rng::AbstractRNG=Random.default_rng())
     nnz(W_cpu) == 0 && return W_cpu, 0.0f0, 0.0f0
-    rho_before = estimate_spectral_radius(W_cpu; rng=rng)
+    rho_before, q1 = _estimate_spectral_radius(W_cpu; rng=rng)
     (rho_before > 0 && isfinite(rho_before)) || return W_cpu, rho_before, rho_before
     scale_factor = Float32(target) / rho_before
     nz = nonzeros(W_cpu)
@@ -381,7 +400,10 @@ function _scale_to_spectral_radius!(W_cpu::SparseMatrixCSC{Float16}, target::Flo
         nz[i] = Float16(Float32(nz[i]) * scale_factor)
     end
     dropzeros!(W_cpu)
-    rho_after = nnz(W_cpu) == 0 ? 0.0f0 : estimate_spectral_radius(W_cpu; rng=rng)
+    # Rescaling preserves eigenvectors up to Float16 rounding, so the first
+    # run's Schur vector is a near-converged start for the re-measure.
+    rho_after = nnz(W_cpu) == 0 ? 0.0f0 :
+        first(_estimate_spectral_radius(W_cpu; rng=rng, start=q1))
     return W_cpu, rho_before, rho_after
 end
 

@@ -438,6 +438,12 @@ end
         # dispatch is unambiguous (a dense CuMatrix must not hit two methods).
         @test isempty(Test.detect_ambiguities(LiquidCortex))
         @test hasmethod(LiquidCortex._estimator_operand, Tuple{CuMatrix{Float32}})
+        # `which` throws on an ambiguous signature; it must resolve to the
+        # dense-device method, not the generic AbstractMatrix one.
+        m_cu = which(LiquidCortex._estimator_operand, Tuple{CuMatrix{Float32}})
+        @test m_cu.sig <: Tuple{Any,CuMatrix}
+        @test which(LiquidCortex._estimator_operand, Tuple{Matrix{Float32}}).sig ==
+            Tuple{typeof(LiquidCortex._estimator_operand),AbstractMatrix}
         @test hasmethod(LiquidCortex._estimator_operand,
             Tuple{CUDA.CUSPARSE.CuSparseMatrixCSC{Float16,Int32}})
         @test LiquidCortex._estimator_operand(sparse(Float16[1 0; 0 2])) isa SparseMatrixCSC{Float32,Int32}
