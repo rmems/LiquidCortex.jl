@@ -355,8 +355,8 @@ function _scale_to_spectral_radius!(W_cpu::SparseMatrixCSC{Float16}, target::Flo
     rho_before = estimate_spectral_radius(W_cpu; rng=rng)
     (rho_before > 0 && isfinite(rho_before)) || return W_cpu, rho_before, rho_before
     scale_factor = Float32(target) / rho_before
-    scale_f16 = Float16(scale_factor)
-    isfinite(scale_f16) || throw(ArgumentError(
+    # Guard only: scaling below stays in Float32 and rounds each entry once.
+    isfinite(Float16(scale_factor)) || throw(ArgumentError(
         "recurrent Float16 scale overflowed (scale=$scale_factor, measured ρ=$rho_before, target ρ=$target)"))
     # Scale in Float32 and round once, instead of multiplying Float16×Float16.
     nz = nonzeros(W_cpu)

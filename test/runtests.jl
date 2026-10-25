@@ -81,7 +81,7 @@ end
         for sym in [:SparseBrain, :EnsembleBrain, :BrainConfig, :EnsembleDesynchronizedError,
                     :step!, :ensemble_step!, :get_output, :get_ensemble_output,
                     :compute_reservoir_covariance, :compute_reservoir_covariance!,
-                    :spikes, :membrane, :traces,
+                    :spikes, :membrane, :traces, :estimate_spectral_radius,
                     :diagnostics, :ensemble_diagnostics,
                     :reset!, :free!,
                     :LiquidCortexValidationError, :ETA, :MAX_INHIBITION,
