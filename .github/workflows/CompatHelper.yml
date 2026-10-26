@@ -29,6 +29,10 @@ jobs:
           version: '1.13'
           arch: ${{ runner.arch }}
 
+      # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
+      - name: Require Julia 1.13.2 or newer 1.13
+        run: julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
+
       - name: Add the General registry via Git
         run: |
           import Pkg

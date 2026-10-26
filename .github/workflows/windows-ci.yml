@@ -1,0 +1,147 @@
+name: Windows CI (self-hosted)
+
+# Package tests on DESKTOP-4E1V5HV-liquidcortex
+# (labels: self-hosted, Windows, X64, liquidcortex).
+# GitHub-hosted CPU smoke on windows-latest is in ci.yml (no CUDA).
+# The GPU job stays on the Linux runner labeled `gpu` (gpu-ci.yml).
+#
+# Security: never run untrusted fork PR code on the persistent self-hosted host
+# (GitHub recommendation). Same-repo PRs, pushes, and manual dispatch only.
+on:
+  pull_request:
+    branches:
+      - '**'
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+  push:
+    branches:
+      - main
+      - 'release/*'
+  workflow_dispatch:
+
+# Separate from the Linux GPU concurrency group so an offline Linux runner
+# does not queue this job. Do not cancel main/release pushes.
+concurrency:
+  group: liquidcortex-windows-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-test:
+    name: Julia 1.13.2 — Windows self-hosted
+    # Fork PRs: skip (do not checkout untrusted code onto the Windows host).
+    if: >
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Windows, X64, liquidcortex]
+    timeout-minutes: 120
+
+    env:
+      JULIA_NUM_THREADS: "1"
+      JULIA_PKG_PRECOMPILE_AUTO: "1"
+      # NetworkService's depot is under ServiceProfiles. Windows Application
+      # Control blocks the native pkgimage DLLs Julia writes there, so every
+      # julia process on this job is started with --pkgimages=no.
+
+    # This host's execution policy is Restricted, so the runner's default
+    # `powershell -command ". '{0}'"` wrapper never starts. Bypass is set on
+    # the shell command line, which still uses pwsh for every step after the
+    # bootstrap. The runner does not append LASTEXITCODE handling to a custom
+    # -File shell, so each julia call checks $LASTEXITCODE.
+    defaults:
+      run:
+        shell: pwsh -NoProfile -ExecutionPolicy Bypass -File "{0}"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Windows PowerShell 5.1 is always present. pwsh may not be.
+      - name: Ensure PowerShell 7
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
+        run: |
+          & .\.github\scripts\ensure-pwsh.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Julia 1.13.2 with juliaup
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & .\.github\scripts\install-juliaup.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Pin CI Manifest
+        run: Copy-Item -LiteralPath .github/ci-manifest/Manifest.toml -Destination Manifest.toml -Force
+
+      # CompatHelper / Dependabot edit Project.toml but not this lockfile.
+      - name: Refresh lockfile on dependency-bot PRs
+        if: >
+          github.event_name == 'pull_request' &&
+          (startsWith(github.head_ref, 'compathelper/') ||
+           startsWith(github.head_ref, 'dependabot/'))
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Instantiate
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Query NVIDIA driver
+        run: |
+          $nvsmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+          if (-not $nvsmi) {
+            Write-Warning 'nvidia-smi is not on PATH. CPU tests still run.'
+            exit 0
+          }
+          & nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "nvidia-smi exited $LASTEXITCODE. CPU tests still run."
+            exit 0
+          }
+
+      - name: Exercise CUDA when the device is available
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          functional = try
+              CUDA.functional()
+          catch err
+              @warn "CUDA.functional() raised; CPU tests will still run" exception=(err, catch_backtrace())
+              false
+          end
+          if !functional
+              @warn "CUDA.functional() is false; CPU tests will still run"
+              try
+                  CUDA.functional(true)
+              catch err
+                  @warn "CUDA.functional(true) raised" exception=(err, catch_backtrace())
+              end
+              exit(0)
+          end
+          println("CUDA functional: ", CUDA.name(CUDA.device()))
+          total = sum(CUDA.ones(Float32, 8))
+          CUDA.synchronize()
+          println("CUDA sum(ones(Float32, 8)) = ", total)
+          total == 8 || error("CUDA reduction mismatch: $total")
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; julia_args=["--pkgimages=no"])'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
