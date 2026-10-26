@@ -6,9 +6,9 @@ LiquidCortex
 
 GPU-accelerated sparse liquid state machine for neuromorphic computing.
 
-Production-grade CUDA-accelerated sparse Liquid State Machine (LSM) with
+An experimental CUDA-accelerated sparse Liquid State Machine (LSM) with
 OU-SDE membrane dynamics, multi-lobe ensemble architecture, cuSPARSE mat-vec,
-and STDP covariance learning.
+opt-in recurrent pair-STDP, and read-only spike-history covariance analysis.
 
 On CPU-only systems the module loads cleanly — types and API functions are
 defined, but GPU allocations are deferred until a CUDA device is available.

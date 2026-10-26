@@ -2,7 +2,7 @@
 
 # LiquidCortex.jl
 
-GPU-accelerated sparse liquid state machine for neuromorphic computing
+Experimental GPU-accelerated sparse liquid state machine (LSM) for neuromorphic research
 
 [![Julia](https://img.shields.io/badge/language-Julia-9558B2)](https://julialang.org)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE)
@@ -11,9 +11,25 @@ GPU-accelerated sparse liquid state machine for neuromorphic computing
 
 ---
 
-Production-grade CUDA-accelerated sparse Liquid State Machine (LSM) with
-OU-SDE membrane dynamics, multi-lobe ensemble architecture, cuSPARSE mat-vec,
-and STDP covariance learning.
+An **experimental** CUDA-accelerated sparse Liquid State Machine (LSM) with
+OU-SDE membrane dynamics, a multi-lobe ensemble architecture, cuSPARSE mat-vec,
+opt-in recurrent pair-STDP, and spike-history covariance analysis. The API and
+defaults may change under 0.x; treat results as research, not production
+guarantees.
+
+## Where LiquidCortex Fits
+
+LiquidCortex is the large-GPU **research teacher** in a three-stage path:
+
+1. **Research** — explore reservoir dynamics, timescales and readouts on a big GPU
+   reservoir (this repository), e.g. the
+   [Machine Interoception Benchmark](docs/machine-interoception.md).
+2. **Distillation** — keep only the behavior that earns its cost and distill it, see
+   [SynapticDistill.jl](https://github.com/rmems/SynapticDistill.jl).
+3. **Small SNN** — deploy the distilled student as a compact spiking network, see
+   [Spikenaut-SNN](https://github.com/rmems/Spikenaut-SNN).
+
+The package itself stays application-neutral: it steps any time series you feed it.
 
 ## Features
 
@@ -21,8 +37,8 @@ and STDP covariance learning.
 - Configurable input/output dimensions (`n_in`, `n_out`) and an explicit `rng` for reproducible topology / noise
 - OU-SDE dynamics: `dV = ((V_rest - V)/τ + I_rec + I_ext)dt + σ dW`
 - cuSPARSE Float16 sparse mat-vec on GPU (fits 65k neurons in 16 GB VRAM)
-- STDP covariance learning with eligibility traces
-- Configurable rolling spike history buffer (circular, on-GPU; default 1000 ticks)
+- Opt-in recurrent pair-STDP (`plasticity=:recurrent_stdp`) with eligibility traces; the default `:readout_only` keeps recurrent `W` frozen
+- Configurable rolling spike history buffer (circular, on-GPU; default 1000 ticks) feeding read-only covariance analysis (`compute_reservoir_covariance`)
 - `EnsembleBrain` — multi-lobe: multiple reservoirs with different time constants (`taus` / `weights`)
 - Generic inhibition interface — caller provides a stress signal
 
@@ -119,16 +135,29 @@ threshold); reset to `V_reset` = −70 mV, which is distinct from `V_rest` = −
 
 *Ornstein & Uhlenbeck (1930); Maass, Natschläger & Markram (2002)*
 
-## STDP Covariance Learning
+## Recurrent Pair-STDP vs. Covariance Analysis
 
-```
-ΔW_ij = η (⟨s_i s_j⟩ - ⟨s_i⟩⟨s_j⟩)
-```
+These are two different things:
 
-Computed on a subsampled window (`BrainConfig.cov_subsample`, default 8192,
-clamped to `N`) to avoid O(N²) blow-up.
+- **Recurrent pair-STDP** (`plasticity=:recurrent_stdp`, opt-in) *changes* the sparse
+  recurrent weights every tick from pre/post eligibility traces: potentiation when a
+  pre-trace coincides with a post spike, depression for the reverse order. Strength is set
+  by `recurrent_eta`.
+- **Covariance analysis** (`compute_reservoir_covariance`) is a *read-only* diagnostic. It
+  computes the covariance of the rolling spike history on a subsample
+  (`BrainConfig.cov_subsample`, default 8192, clamped to `N`) and never updates any weight.
+
+The default `:readout_only` mode trains neither: recurrent `W` stays frozen and only the
+Hebbian readout `W_out` adapts.
 
 *Bi & Poo (1998); Hebb (1949)*
+
+## Machine Interoception Benchmark
+
+[`examples/interoception`](examples/interoception) is a deterministic replay benchmark that
+compares readout-only LiquidCortex against persistence, linear and MLP baselines on held-out
+telemetry sessions (design note: [docs/machine-interoception.md](docs/machine-interoception.md)).
+It lives outside the core package; the bundled fixture is synthetic.
 
 ## Provenance
 

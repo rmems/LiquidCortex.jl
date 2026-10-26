@@ -15,6 +15,13 @@ change under `0.2.0`.
 
 ### Added
 
+- Machine Interoception Benchmark v1 (`examples/interoception/`, `docs/machine-interoception.md`):
+  a deterministic, session-split replay of telemetry through persistence / ridge / MLP baselines
+  and readout-only `SparseBrain` / `EnsembleBrain` readouts (plus a reflex-gated online-readout
+  and a recurrent pair-STDP ablation), with an explicit timebase contract and a machine-readable
+  JSON result. Example code only; the core package is unchanged. Tests in
+  `test/interoception_tests.jl`.
+
 - `ReferenceLSM` owns reference-reservoir weights and membrane state. Two
   instances do not share arrays; construction is deterministic given `rng`.
   `run_lsm_step!` steps an instance. `run_lsm_step` / `run_lsm_step_str` /
@@ -39,6 +46,12 @@ change under `0.2.0`.
   `CONTRIBUTING.md`, `SECURITY.md`, and `.JuliaFormatter.toml`.
 - CI-only Manifest at `.github/ci-manifest/Manifest.toml` (Julia 1.13). Root
   `Manifest.toml` stays gitignored so library consumers are not pinned.
+
+### Changed
+
+- README/docs describe LiquidCortex as an experimental GPU sparse LSM, add "Where LiquidCortex
+  Fits", and separate recurrent pair-STDP from read-only covariance analysis in the wording.
+  Documenter `authors` updated to `rmems`.
 
 ### Removed
 
