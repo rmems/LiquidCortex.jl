@@ -50,7 +50,8 @@ function infer_source_dt_ms(t_ms::AbstractVector{<:Real}; jitter_tol::Real=0.25)
     length(t_ms) >= 2 || throw(TimebaseError("need at least 2 timestamps"))
     d = diff(Float64.(t_ms))
     all(>(0), d) || throw(TimebaseError("timestamps must be strictly increasing"))
-    m = sort(d)[cld(length(d), 2)]
+    s = sort(d); n = length(d)
+    m = isodd(n) ? s[(n + 1) ÷ 2] : (s[n ÷ 2] + s[n ÷ 2 + 1]) / 2
     bad = findfirst(x -> abs(x - m) > jitter_tol * m, d)
     bad === nothing || throw(TimebaseError(
         "irregular sampling: gap of $(d[bad]) ms at row $(bad + 1) vs median $(m) ms " *

@@ -165,9 +165,18 @@ const IB_CFG = joinpath(IB_DIR, "config.example.toml")
         @test st.n_false_alerts == 0
         miss = IB.lead_time_stats(falses(8), exceed; h_steps=2, lookback_steps=4, dt_ms=100)
         @test miss.n_events == 1 && isempty(miss.leads)
-        late = IB.lead_time_stats([false, false, false, false, false, false, true, false], exceed;
+        ex12 = [false, false, false, false, true, true, false, false, false, false, false, false]
+        late = IB.lead_time_stats(push!(falses(11), false) .| (1:12 .== 8), ex12;
             h_steps=2, lookback_steps=4, dt_ms=100)
-        @test isempty(late.leads) && late.n_false_alerts == 1
+        @test isempty(late.leads) && late.n_false_alerts == 1 && late.n_alerts == 1
+        # alerts without a full lookahead window are not scored as false
+        edge = IB.lead_time_stats([false, false, false, false, false, false, true, false], exceed;
+            h_steps=2, lookback_steps=4, dt_ms=100)
+        @test edge.n_alerts == 0 && edge.n_false_alerts == 0
+        # one alert is never credited to two separate onsets
+        ex2 = [false, false, true, false, true, false, false, false, false, false]
+        one = IB.lead_time_stats(1:10 .== 1, ex2; h_steps=1, lookback_steps=4, dt_ms=100)
+        @test one.n_events == 2 && length(one.leads) == 1
     end
 
     @testset "CPU: baselines" begin
