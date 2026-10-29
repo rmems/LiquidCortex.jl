@@ -52,6 +52,8 @@ function make_stress_fn(features, rcfg)
     it = findfirst(==("gpu_temp_c"), features); iv = findfirst(==("vram_used_pct"), features)
     tlo = Float64(get(rcfg, "temp_lo_c", 70.0)); thi = Float64(get(rcfg, "temp_hi_c", 90.0))
     vlo = Float64(get(rcfg, "vram_lo_pct", 80.0)); vhi = Float64(get(rcfg, "vram_hi_pct", 98.0))
+    thi > tlo || throw(ArgumentError("stress: temp_hi_c ($thi) must exceed temp_lo_c ($tlo)"))
+    vhi > vlo || throw(ArgumentError("stress: vram_hi_pct ($vhi) must exceed vram_lo_pct ($vlo)"))
     return row -> clamp(max((row[it] - tlo) / (thi - tlo), (row[iv] - vlo) / (vhi - vlo)), 0.0, 1.0)
 end
 

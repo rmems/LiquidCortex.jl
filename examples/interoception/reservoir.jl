@@ -70,6 +70,8 @@ stress signal to the brain's reflex-gated readout adaptation (Experiment B); wit
 function run_reservoir(spec::ReservoirSpec, sessions_z::AbstractDict, order::Vector{String};
     plasticity::Symbol=:readout_only, stress::Union{Nothing,AbstractDict}=nothing,
     reflex_gain::Real=0.0)
+    bad = setdiff(spec.features, [:membrane, :trace])
+    isempty(bad) || throw(ArgumentError("unsupported reservoir feature(s) $(bad); use :membrane and/or :trace"))
     n_in = size(sessions_z[order[1]], 2)
     base_gb = _vram_used_gb()
     brain = build_brain(spec, n_in)

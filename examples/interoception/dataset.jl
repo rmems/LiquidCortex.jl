@@ -103,12 +103,12 @@ function load_sessions(dir::AbstractString; time_column::AbstractString="t_ms",
     for id in ids
         _, cols, sha = tables[id]
         t = cols[time_column]
-        any(isnan, t) && throw(DatasetError("$id: NaN in time column"))
+        all(isfinite, t) || throw(DatasetError("$id: NaN or non-finite value in time column"))
         push!(dts, infer_source_dt_ms(t; jitter_tol=jitter_tol))
         X = hcat((cols[c] for c in features)...)
-        bad = findfirst(isnan, X)
+        bad = findfirst(!isfinite, X)
         bad === nothing || throw(DatasetError(
-            "$id: missing value in column \"$(features[bad[2]])\" at row $(bad[1]); " *
+            "$id: missing or non-finite value in column \"$(features[bad[2]])\" at row $(bad[1]); " *
             "repair or drop the row before replay (no implicit fill)"))
         push!(sessions, SourceSession(id, sha, t, X))
     end
