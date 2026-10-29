@@ -8,7 +8,7 @@ DocMeta.setdocmeta!(LiquidCortex, :DocTestSetup, :(using LiquidCortex); recursiv
 makedocs(;
     sitename="LiquidCortex.jl",
     modules=[LiquidCortex],
-    authors="Limen-Neural",
+    authors="rmems",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://rmems.github.io/LiquidCortex.jl/stable/",
