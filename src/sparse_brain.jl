@@ -9,6 +9,7 @@
 #   Varying time constants: τ_m ∈ {10ms, 25ms, 50ms, 100ms}
 #   Xavier/Glorot W_out initialization (breaks zero-readout deadlock)
 #   Sparse connectivity (1% connection probability, Float16 weights)
+#   Recurrent W rescaled to a measured spectral radius (Krylov estimate)
 #   STDP covariance learning rule
 #   Rolling 1,000-tick spike history for deep temporal covariance
 #   Generic inhibition interface (caller provides stress signal)
@@ -21,6 +22,7 @@ using LinearAlgebra
 using Statistics
 using Random
 using Printf
+using ArnoldiMethod: ArnoldiMethod
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -29,7 +31,11 @@ const CONN_PROB = 0.01          # 1% sparse connectivity → ~42M non-zero synap
 const DT = 1.0f0         # Simulation timestep (normalized to tick interval)
 const HIST_DEPTH = 1000          # Rolling history depth (ticks) for deep temporal covariance
 const COV_SUBSAMPLE = 8192          # Subsampled neurons for tractable covariance (avoids 17 GB N×N)
-const SPECTRAL_RADIUS = 0.9f0       # Target spectral radius (echo-state scaling)
+const SPECTRAL_RADIUS = 0.9f0       # Target spectral radius ρ(W) of the recurrent matrix
+const RHO_MAX_RESTARTS = 500        # Implicit Arnoldi restarts for the ρ(W) estimate
+const RHO_KRYLOV_DIM = 80           # Krylov basis vectors per restart cycle
+const RHO_REL_TOL = 1.0f-4          # Ritz residual tolerance ‖Wx − λx‖ ≤ rel_tol·|λ| (floored at ε‖H‖)
+const RHO_REL_TOL_RETRY = 1.0f-2    # Looser tolerance tried once when the first run does not converge
 
 # ── Lobe time constants (membrane τ_m in ms) ─────────────────────────────────
 const LOBE_TAUS = Float32[10.0, 25.0, 50.0, 100.0]
@@ -81,7 +87,13 @@ do not `BoundsError` in [`compute_reservoir_covariance!`](@ref).
 # Fields
 - `N`: reservoir neuron count
 - `conn_prob`: recurrent connection probability
-- `spectral_radius`: target ρ used to scale sparse `W`
+- `spectral_radius`: target spectral radius ρ(W) of the sparse recurrent
+  matrix. `W` is rescaled by a measured ρ (Krylov estimate, see
+  [`estimate_spectral_radius`](@ref)), so the achieved value is within a few
+  percent of this target plus Float16 rounding. ρ < 1 is a necessary, not
+  sufficient, condition for the echo state property of a *linear* reservoir,
+  and for this hard-threshold spiking LSM it is a linearisation statistic
+  only — it does not by itself guarantee fading memory.
 - `dt`: Euler–Maruyama step
 - `hist_depth`: rolling spike-history rows
 - `cov_subsample`: neurons kept for covariance (clamped to `N`)
@@ -251,18 +263,169 @@ function cpu_randn_cu(rng::AbstractRNG, dims::Integer...)
 end
 cpu_randn_cu(dims::Integer...) = cpu_randn_cu(Random.default_rng(), dims...)
 
+# The estimator always runs on the host in Float32. A Float16 reservoir is
+# widened (Float16 Krylov vectors would lose the ρ estimate to rounding), and a
+# device matrix is downloaded once: cuSPARSE has no mixed Float16×Float32 SpMV
+# and ArnoldiMethod.jl allocates its Krylov basis on the host anyway. At the
+# shipped size this is ~42 M nnz × (4 B value + 4 B row index) ≈ 340 MB.
+_estimator_operand(W::SparseMatrixCSC) = SparseMatrixCSC{Float32,Int32}(W)
+_estimator_operand(W::AbstractMatrix) = Matrix{Float32}(W)
+_estimator_operand(W::CUDA.CUSPARSE.AbstractCuSparseMatrix) = _estimator_operand(SparseMatrixCSC(W))
+_estimator_operand(W::CuMatrix) = Matrix{Float32}(Array(W))
+
 """
-    _generate_recurrent_cpu(cfg) -> SparseMatrixCSC{Float16,Int}
+    estimate_spectral_radius(W; max_iters=RHO_MAX_RESTARTS, rel_tol=RHO_REL_TOL, rng, krylov_dim=RHO_KRYLOV_DIM) -> Float32
+
+Estimate the spectral radius ρ(W) = max |λ| of a square matrix `W` with
+implicitly restarted Arnoldi (ArnoldiMethod.jl `partialschur`, `nev=1`,
+`which=:LM`). The matrix is widened to a host `Float32` operand first (see
+`_estimator_operand`); the Krylov subspace holds at most `krylov_dim`
+vectors and is restarted up to `max_iters` times until the Ritz pair
+satisfies ‖W x − λ x‖ ≤ max(ε‖H‖, rel_tol·|λ|).
+
+Random, non-symmetric sparse matrices have an almost circular spectrum
+with poorly separated edge eigenvalues; an unrestarted Krylov iteration
+with a plateau stop under-estimates ρ by several percent at `N = 65_536`
+(review of GH #53 PR). Restarts with a residual criterion remove that bias.
+
+`rng` seeds the start vector. If no Ritz pair converges within `max_iters`
+restarts the run is retried once at `max(RHO_REL_TOL_RETRY, 10·rel_tol)`, and
+failing that the best Ritz value of a single `krylov_dim`-vector Krylov cycle
+is returned; both fallbacks emit a `@warn` saying which one was used. An
+`ArgumentError` is thrown only if even that single cycle yields no Ritz
+value. Returns `0f0` for an empty or all-zero matrix.
+
+Accepts host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and
+`CuMatrix` (device inputs are copied to the host).
+"""
+function estimate_spectral_radius(W::AbstractMatrix;
+    max_iters::Integer=RHO_MAX_RESTARTS,
+    rel_tol::Real=RHO_REL_TOL,
+    rng::AbstractRNG=Random.default_rng(),
+    krylov_dim::Integer=RHO_KRYLOV_DIM)
+    rho, _ = _estimate_spectral_radius(W; max_iters=max_iters, rel_tol=rel_tol,
+        rng=rng, krylov_dim=krylov_dim)
+    return rho
+end
+
+# Internal: also returns the converged Schur vector (or `nothing`) so a second
+# estimate on a rescaled copy of the same matrix can be warm-started with it
+# (`start` kwarg), which cuts the restart count to a handful.
+function _estimate_spectral_radius(W::AbstractMatrix;
+    max_iters::Integer=RHO_MAX_RESTARTS,
+    rel_tol::Real=RHO_REL_TOL,
+    rng::AbstractRNG=Random.default_rng(),
+    krylov_dim::Integer=RHO_KRYLOV_DIM,
+    start::Union{Nothing,AbstractVector}=nothing)
+    n = size(W, 1)
+    size(W, 2) == n || throw(ArgumentError(
+        "estimate_spectral_radius needs a square matrix, got $(size(W))"))
+    max_iters >= 1 || throw(ArgumentError("max_iters must be ≥ 1, got $max_iters"))
+    (isfinite(rel_tol) && rel_tol >= 0) || throw(ArgumentError(
+        "rel_tol must be finite and ≥ 0, got $rel_tol"))
+    krylov_dim >= 2 || throw(ArgumentError("krylov_dim must be ≥ 2, got $krylov_dim"))
+    n == 0 && return 0.0f0, nothing
+    A = _estimator_operand(W)
+    all(isfinite, _nonzero_values(A)) || throw(ArgumentError(
+        "estimate_spectral_radius: matrix has non-finite entries"))
+    iszero(_nonzero_values(A)) && return 0.0f0, nothing
+    if n == 1
+        return Float32(abs(A[1, 1])), nothing
+    end
+    maxdim = min(Int(krylov_dim), n)
+    mindim = min(max(2, maxdim ÷ 2), maxdim)
+    v1 = if start === nothing || length(start) != n || !all(isfinite, start)
+        randn(rng, Float32, n)
+    else
+        Vector{Float32}(start)
+    end
+    tol = Float32(rel_tol)
+    res = _partialschur_rho(A, v1, tol, mindim, maxdim, Int(max_iters))
+    res === nothing || return res
+    # ArnoldiMethod 0.4 returns only *converged* Ritz values, so a run that
+    # exhausts `restarts` yields an empty spectrum. Retry once at a looser
+    # tolerance (still far inside the constructor's 5 % check) before falling
+    # back to the best Ritz value of a single `maxdim` Krylov cycle, which a
+    # non-finite tolerance always accepts.
+    retry_tol = max(RHO_REL_TOL_RETRY, 10 * tol)
+    res = _partialschur_rho(A, v1, retry_tol, mindim, maxdim, Int(max_iters))
+    if res !== nothing
+        @warn "estimate_spectral_radius: not converged at rel_tol=$tol after $max_iters restarts; converged at rel_tol=$retry_tol" krylov_dim = maxdim
+        return res
+    end
+    res = _partialschur_rho(A, v1, floatmax(Float32), mindim, maxdim, 1)
+    res === nothing && throw(ArgumentError(
+        "estimate_spectral_radius: Arnoldi returned no Ritz value even for a single Krylov cycle"))
+    @warn "estimate_spectral_radius: not converged at rel_tol=$tol or $retry_tol after $max_iters restarts; returning the best Ritz value of one $maxdim-vector Krylov cycle (unconverged estimate)" krylov_dim = maxdim
+    return res
+end
+
+# One `partialschur` run. Returns `nothing` when no Ritz pair converged
+# (ArnoldiMethod reports only converged values), else `(max |λ|, schur_vector)`
+# where the vector spans the dominant Schur direction (usable as a warm start).
+function _partialschur_rho(A, v1::Vector{Float32}, tol::Float32, mindim::Int, maxdim::Int,
+                           restarts::Int)
+    decomp, history = ArnoldiMethod.partialschur(A;
+        v1=copy(v1), nev=1, which=:LM, tol=tol,
+        mindim=mindim, maxdim=maxdim, restarts=restarts)
+    (history.converged && !isempty(decomp.eigenvalues)) || return nothing
+    return Float32(maximum(abs, decomp.eigenvalues)), Vector{Float32}(real.(decomp.Q[:, 1]))
+end
+
+_nonzero_values(A::SparseMatrixCSC) = nonzeros(A)
+_nonzero_values(A::AbstractMatrix) = A
+
+"""
+    _scale_to_spectral_radius!(W_cpu, target; rng) -> (W_cpu, rho_before, rho_after)
+
+Rescale the sparse Float16 matrix `W_cpu` in place so its measured spectral
+radius is `target`. `rho_before` is the Krylov estimate on the input,
+`rho_after` is a fresh estimate on the rescaled Float16 matrix (so it
+includes Float16 rounding of the scaled entries). Returns the matrix
+unchanged with `(0, 0)` when it has no nonzeros or when ρ is not measurable.
+"""
+function _scale_to_spectral_radius!(W_cpu::SparseMatrixCSC{Float16}, target::Float32;
+    rng::AbstractRNG=Random.default_rng())
+    nnz(W_cpu) == 0 && return W_cpu, 0.0f0, 0.0f0
+    rho_before, q1 = _estimate_spectral_radius(W_cpu; rng=rng)
+    (rho_before > 0 && isfinite(rho_before)) || return W_cpu, rho_before, rho_before
+    scale_factor = Float32(target) / rho_before
+    nz = nonzeros(W_cpu)
+    # Only the *scaled weights* must fit Float16; the scale itself may exceed it.
+    w_peak = Float32(maximum(abs, nz)) * scale_factor
+    w_peak <= floatmax(Float16) || throw(ArgumentError(
+        "recurrent Float16 overflow: max |w| after scaling = $w_peak (scale=$scale_factor, measured ρ=$rho_before, target ρ=$target)"))
+    # Scale in Float32 and round once, instead of multiplying Float16×Float16.
+    @inbounds for i in eachindex(nz)
+        nz[i] = Float16(Float32(nz[i]) * scale_factor)
+    end
+    dropzeros!(W_cpu)
+    # Rescaling preserves eigenvectors up to Float16 rounding, so the first
+    # run's Schur vector is a near-converged start for the re-measure.
+    rho_after = nnz(W_cpu) == 0 ? 0.0f0 :
+        first(_estimate_spectral_radius(W_cpu; rng=rng, start=q1))
+    return W_cpu, rho_before, rho_after
+end
+
+"""
+    _generate_recurrent_cpu(cfg) -> (W::SparseMatrixCSC{Float16,Int}, rho_measured::Float32)
 
 CPU-side sparse recurrent matrix: independent Bernoulli edges at
-`cfg.conn_prob` (`sprand`), zero diagonal, then Frobenius / √nnz scaling
-toward `cfg.spectral_radius`. Uses `cfg.rng`.
+`cfg.conn_prob` (`sprand`), zero diagonal, then rescaled so the **measured**
+spectral radius (Krylov estimate, [`estimate_spectral_radius`](@ref)) equals
+`cfg.spectral_radius`. `rho_measured` is re-estimated on the final Float16
+matrix, so it is a measurement of what ships, not the target. Uses `cfg.rng`.
+
+Before this fix the scale factor used `norm(W)/sqrt(nnz(W))`, which is the
+RMS of the nonzeros (≈ the 0.02 init std) and carries no spectral
+information; at `N = 65_536`, `conn_prob = 0.01` that shipped ρ ≈ 23 under a
+log line that printed the target 0.9 (GH #53).
 """
 function _generate_recurrent_cpu(cfg::BrainConfig)
     n = cfg.N
     p = cfg.conn_prob
     if p <= 0 || n <= 1
-        return spzeros(Float16, n, n)
+        return spzeros(Float16, n, n), 0.0f0
     end
     rng = cfg.rng
     W_cpu = sprand(rng, n, n, p, (r, len) -> Float16.(randn(r, Float32, len) .* 0.02f0))
@@ -270,17 +433,9 @@ function _generate_recurrent_cpu(cfg::BrainConfig)
         W_cpu[i, i] = Float16(0)
     end
     dropzeros!(W_cpu)
-    actual_nnz = nnz(W_cpu)
-    actual_nnz == 0 && return W_cpu
-    frob = norm(W_cpu)
-    (frob > 0 && isfinite(frob)) || return W_cpu
-    spectral_approx = frob / sqrt(actual_nnz)
-    scale_factor = cfg.spectral_radius / max(spectral_approx, 1.0f-6)
-    scale_f16 = Float16(scale_factor)
-    isfinite(scale_f16) || throw(ArgumentError(
-        "recurrent Float16 scale overflowed (scale=$scale_factor, ρ=$(cfg.spectral_radius))"))
-    W_cpu .*= scale_f16
-    return W_cpu
+    nnz(W_cpu) == 0 && return W_cpu, 0.0f0
+    W_cpu, _, rho_after = _scale_to_spectral_radius!(W_cpu, cfg.spectral_radius; rng=rng)
+    return W_cpu, rho_after
 end
 
 # ── Host-side kernels (plain arrays; unit-tested on CPU) ─────────────────────
@@ -509,6 +664,9 @@ calls `free!`.
 - `n_in::Int`: input dimension
 - `n_out::Int`: output dimension
 - `tau_m::Float32`: membrane time constant (ms)
+- `spectral_radius_measured::Float32`: Krylov estimate of ρ(W) on the shipped
+  Float16 matrix at construction (`0` when `W` has no nonzeros); compare with
+  `cfg.spectral_radius`
 - `cfg::BrainConfig`: reservoir hyperparameters and RNG
 - `history::CuMatrix{Float32}`: rolling spike history (`cfg.hist_depth × cfg.N`)
 - `hist_idx::Int64`: next history write index (circular)
@@ -569,6 +727,9 @@ mutable struct SparseBrain
     # ── Per-lobe membrane time constant ──────────────────────────────────────
     tau_m::Float32                # τ_m in ms
 
+    # ── Measured spectral radius of W at construction (Krylov estimate) ──────
+    spectral_radius_measured::Float32
+
     # ── Runtime hyperparameters + RNG ───────────────────────────────────────
     cfg::BrainConfig
 
@@ -627,8 +788,11 @@ end
 Initialize a sparse CUDA reservoir lobe.
 
 Weight initialization:
-  - W_recurrent: Sparse CSC, `cfg.conn_prob` connectivity, Float16
-    Spectral radius controlled via scaling toward `cfg.spectral_radius`
+  - W_recurrent: Sparse CSC, `cfg.conn_prob` connectivity, Float16.
+    Rescaled so the *measured* spectral radius (Krylov estimate) equals
+    `cfg.spectral_radius`; the achieved value is stored in
+    `brain.spectral_radius_measured` and logged at `@debug`. A measured value
+    more than 5 % off target emits a `@warn`.
   - W_in: Dense Float32, Xavier initialization √(2/n_in)
   - W_out: Dense Float32, Xavier/Glorot initialization √(2/N)
     (Breaks zero-readout deadlock — reservoir produces signals from tick 1)
@@ -683,9 +847,14 @@ function SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(),
     nnz_expected = round(Int, n * n * cfg.conn_prob)
     @debug "[brain:$name] Generating sparse connectivity (~$(round(nnz_expected / 1e6, digits=1))M synapses)..."
 
-    W_cpu = _generate_recurrent_cpu(cfg)
+    W_cpu, rho_measured = _generate_recurrent_cpu(cfg)
 
-    @debug "[brain:$name] W_sparse: $(nnz(W_cpu)) nnz, ρ≈$(round(cfg.spectral_radius, digits=2))"
+    # `rho_measured` is a Krylov estimate on the shipped Float16 matrix, not
+    # the target (GH #53: the old line echoed `cfg.spectral_radius`).
+    @debug "[brain:$name] W_sparse: $(nnz(W_cpu)) nnz, measured ρ=$(round(rho_measured, digits=3)) (target $(cfg.spectral_radius))"
+    if nnz(W_cpu) > 0 && !isapprox(rho_measured, cfg.spectral_radius; rtol=0.05)
+        @warn "[brain:$name] recurrent spectral radius off target" measured = rho_measured target = cfg.spectral_radius
+    end
 
     # Transfer to GPU as CuSparseMatrixCSC
     # Edge lists for pair STDP are built lazily in `_ensure_edge_indices!`
@@ -738,6 +907,7 @@ function SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(),
         output,
         n_in, n_out,
         tau_m,
+        rho_measured,
         cfg,
         history, 1, false,
         Float32(cfg.v_thresh),
@@ -1097,6 +1267,8 @@ function Base.show(io::IO, ::MIME"text/plain", brain::SparseBrain)
     println(io, "  τ_m: ", brain.tau_m, " ms")
     println(io, "  n_in: ", brain.n_in, ", n_out: ", brain.n_out)
     println(io, "  neurons: ", brain.cfg.N, ", recurrent nnz: ", brain.nnz)
+    println(io, "  spectral radius: measured ", round(brain.spectral_radius_measured, digits=3),
+            " (target ", brain.cfg.spectral_radius, ")")
     println(io, "  ticks: ", brain.tick_count,
             ", hist_full: ", brain.hist_full)
     print(io, "  last spike rate: ",

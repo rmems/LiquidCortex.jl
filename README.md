@@ -18,6 +18,7 @@ and STDP covariance learning.
 ## Features
 
 - `SparseBrain` — configurable reservoir via `BrainConfig`: N neurons, connectivity, spectral radius, Float16 sparse weights on GPU
+- Recurrent weights are rescaled to a *measured* spectral radius (Krylov estimate, `estimate_spectral_radius`); the achieved value is stored in `brain.spectral_radius_measured`. Note that ρ(W) < 1 is a necessary, not sufficient, condition for the echo state property of a linear reservoir, and for this spiking LSM it is a linearisation statistic — tune it empirically (kernel quality / memory capacity), do not read it as a guarantee of fading memory.
 - Configurable input/output dimensions (`n_in`, `n_out`) and an explicit `rng` for reproducible topology / noise
 - OU-SDE dynamics: `dV = ((V_rest - V)/τ + I_rec + I_ext)dt + σ dW`
 - cuSPARSE Float16 sparse mat-vec on GPU (fits 65k neurons in 16 GB VRAM)

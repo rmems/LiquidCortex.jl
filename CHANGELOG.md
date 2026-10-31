@@ -47,6 +47,27 @@ change under `0.2.0`.
 
 ### Fixed
 
+- **Spectral-radius scaling now measures ρ(W)** (`#53`, RM-1112). The
+  constructor previously scaled `W` by `norm(W)/sqrt(nnz(W))` — the RMS of the
+  nonzeros (≈ the 0.02 init std), not a spectral radius — and then logged the
+  target `0.9`. At the shipped `N=65_536`, `conn_prob=0.01` the reservoir
+  actually had ρ ≈ 23 (sparse circular law ρ ≈ s·√k_eff). `W` is now rescaled
+  by an implicitly restarted Arnoldi estimate of ρ (new dependency
+  ArnoldiMethod.jl, `partialschur`, residual criterion) computed in Float32
+  on a host copy of the CSC, the
+  value re-measured on the final Float16 matrix is stored in
+  `brain.spectral_radius_measured`, logged at `@debug`, and a `@warn` fires if
+  it is more than 5 % off `cfg.spectral_radius`. New exported helper
+  `estimate_spectral_radius(W; max_iters, rel_tol, rng, krylov_dim)` works on
+  host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and `CuMatrix`
+  (device inputs are copied to the host).
+  **Any result produced with earlier versions used a reservoir ~25× over the
+  documented spectral radius and should be considered invalid.** Internal
+  `_generate_recurrent_cpu(cfg)` now returns `(W, rho_measured)`.
+  Docstrings/README no longer claim the echo state property follows from
+  ρ ≈ 0.9 (necessary, not sufficient — Yildiz, Jaeger & Kiebel 2012; and a
+  linearisation statistic only for a hard-threshold spiking LSM —
+  Legenstein & Maass 2007).
 - Fake doctest rerun and coverage-artifact gitignore: `#66`.
 - Folding the duplicate Codecov workflow into `ci.yml`: `#69` (landed).
 - Restore the GPU "failed step! does not commit tick" clock assertions that
