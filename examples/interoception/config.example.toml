@@ -10,6 +10,7 @@ dir = "fixtures"                 # one CSV per session; file stem = session id
 time_column = "t_ms"
 required_features = ["gpu_temp_c", "vram_used_pct", "gpu_power_w", "throttle_active"]
 jitter_tol = 0.25                # relative gap tolerance; larger gaps are an error
+cadence_tol = 0.001              # relative tolerance between session median cadences
 
 # Optional explicit renames for exports with other column names (source = "canonical"), e.g. the
 # rmems/gaming-telemetry canonical CSV (also set time_column = "timestamp_ms"):

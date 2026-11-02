@@ -91,6 +91,33 @@ const IB_CFG = joinpath(IB_DIR, "config.example.toml")
             write(joinpath(d, "b.csv"), "t_ms,gpu_temp_c\n0,50\n500,51\n")
             @test_throws IB.DatasetError IB.load_sessions(d)           # mixed cadences
         end
+        mktempdir() do d
+            write(joinpath(d, "a.csv"), "t_ms,gpu_temp_c
+0,50
+100,51
+")
+            write(joinpath(d, "b.csv"), "t_ms,gpu_temp_c
+0,50
+120,51
+")
+            @test_throws IB.DatasetError IB.load_sessions(d)           # within jitter_tol, still mixed
+        end
+        mktempdir() do d
+            write(joinpath(d, "a.csv"), "t_ms,gpu_temp_c
+0,50
+100,Inf
+200,52
+")
+            @test_throws IB.DatasetError IB.load_sessions(d)           # non-finite cell
+        end
+        mktempdir() do d
+            write(joinpath(d, "a.csv"), "t_ms,throttle_active
+0,0
+100,2
+200,1
+")
+            @test_throws IB.DatasetError IB.load_sessions(d)           # non-binary flag
+        end
     end
 
     @testset "CPU: split is by session and never overlaps" begin
@@ -124,6 +151,8 @@ const IB_CFG = joinpath(IB_DIR, "config.example.toml")
         policy = IB.Policy(Dict())
         targets = ["gpu_temp_c", "vram_used_pct", "gpu_power_w", "throttle_active"]
         stress = IB.make_stress_fn(feats, Dict())
+        @test_throws ArgumentError IB.make_stress_fn(feats, Dict("temp_lo_c" => -Inf))
+        @test_throws ArgumentError IB.make_stress_fn(feats, Dict("vram_hi_pct" => 80.0))
         mk(d) = IB.build_split(["s01"], d, feats, targets, [1, 5], 5, policy, 10, stress)
         a = mk(S)
         t0 = 120
@@ -240,6 +269,9 @@ const IB_CFG = joinpath(IB_DIR, "config.example.toml")
         @test IB.summaries_match(IB.deterministic_view(r), IB.deterministic_view(r2))
 
         # a replay cadence the source cannot support is rejected before any model work
+        nodt = deepcopy(cfg); delete!(nodt["timebase"], "replay_dt_ms")
+        @test_throws IB.TimebaseError IB.run_benchmark(nodt; base_dir=IB_DIR)
+        @test all(s -> s["source_dt_ms"] == 100 && s["source_mean_dt_ms"] == 100, r["dataset"]["sessions"])
         bad = deepcopy(cfg); bad["timebase"]["replay_dt_ms"] = 10
         @test_throws IB.TimebaseError IB.run_benchmark(bad; base_dir=IB_DIR, use_gpu=false)
         # horizons that are not a multiple of the replay cadence are listed, not rounded
@@ -256,7 +288,9 @@ const IB_CFG = joinpath(IB_DIR, "config.example.toml")
             cfg = TOML.parsefile(IB_CFG)
             cfg["reservoir"]["readout_neurons"] = 64
             cfg["experiments"]["C"] = true
+            seed_test_rng!(20260915)
             r1 = IB.run_benchmark(cfg; base_dir=IB_DIR)
+            seed_test_rng!(20260915)
             r2 = IB.run_benchmark(cfg; base_dir=IB_DIR)
 
             # reproducible within the documented tolerance

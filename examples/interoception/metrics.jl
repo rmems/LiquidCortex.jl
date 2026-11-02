@@ -68,7 +68,8 @@ end
 `alert[i]`/`exceed[i]` are per-row booleans of one contiguous session range. Row `i`
 is issued at step `t_i` and refers to target time `t_i + h`; `exceed[i]` means the
 true target at `t_i + h` is beyond the threshold. An *event* is an onset
-(`exceed[j] && !exceed[j-1]`). The earliest alert at a row `i ∈ [j-lookback, j]`
+(`exceed[j] && !exceed[j-1]`); a range that opens in exceedance has no event at its
+first row, since no earlier row or alert window exists to score it. The earliest alert at a row `i ∈ [j-lookback, j]`
 covers it with lead `(j - i + h)·dt_ms` (time from issuing the alert to the
 crossing). A *false alert* is an alerting row with no exceedance in rows
 `[i, i+lookback]`. Alerts within `lookback_steps` of the range end lack a full

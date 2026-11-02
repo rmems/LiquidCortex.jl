@@ -63,16 +63,18 @@ function read_table(path::AbstractString)
 end
 
 """
-    load_sessions(dir; time_column="t_ms", required, jitter_tol=0.25)
+    load_sessions(dir; time_column="t_ms", required, jitter_tol=0.25, cadence_tol=1e-3)
 
 Load every `*.csv` in `dir` (sorted by id). The feature list is the canonical
 columns present in **all** sessions. A missing `required` column throws; a missing
 optional canonical column is dropped and listed in `missing_features` — it is never
 filled with a constant. `column_map` (`source => canonical`) renames export-specific
-columns explicitly; unmapped columns are ignored. Returns `(sessions, features, missing_features, source_dt_ms)`.
+columns explicitly; unmapped columns are ignored. Session median cadences must agree
+within `cadence_tol` (relative), because one `source_dt_ms` is applied to all of them.
+Returns `(sessions, features, missing_features, source_dt_ms)`.
 """
 function load_sessions(dir::AbstractString; time_column::AbstractString="t_ms",
-    required::AbstractVector{<:AbstractString}=String[], jitter_tol::Real=0.25,
+    required::AbstractVector{<:AbstractString}=String[], jitter_tol::Real=0.25, cadence_tol::Real=1e-3,
     column_map::AbstractDict=Dict{String,String}())
     isdir(dir) || throw(DatasetError("dataset dir not found: $dir"))
     files = sort(filter(f -> endswith(f, ".csv"), readdir(dir)))
@@ -110,9 +112,15 @@ function load_sessions(dir::AbstractString; time_column::AbstractString="t_ms",
         bad === nothing || throw(DatasetError(
             "$id: missing or non-finite value in column \"$(features[bad[2]])\" at row $(bad[1]); " *
             "repair or drop the row before replay (no implicit fill)"))
+        ith = findfirst(==("throttle_active"), features)
+        if ith !== nothing
+            nb = findfirst(x -> x != 0 && x != 1, view(X, :, ith))
+            nb === nothing || throw(DatasetError(
+                "$id: throttle_active must be 0 or 1, got $(X[nb, ith]) at row $nb"))
+        end
         push!(sessions, SourceSession(id, sha, t, X))
     end
-    all(d -> abs(d - dts[1]) <= jitter_tol * dts[1], dts) || throw(DatasetError(
+    all(d -> abs(d - dts[1]) <= cadence_tol * dts[1], dts) || throw(DatasetError(
         "sessions have different source cadences ($(unique(round.(dts; digits=3))) ms); " *
         "resample them to one cadence first"))
     return sessions, features, missing_features, dts[1]

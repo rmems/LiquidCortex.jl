@@ -58,7 +58,10 @@ pcie_rx_rate pcie_tx_rate throttle_active
 - `required_features` must exist in every session or loading fails. Other canonical columns
   that are absent are dropped and listed in `dataset.missing_features`; they are **never**
   replaced by a constant.
-- Empty/`NaN` cells in a used column are an error (no implicit fill, no null-as-zero).
+- Empty, `NaN` or infinite cells in a used column are an error (no implicit fill, no
+  null-as-zero). `throttle_active` must be exactly `0` or `1`.
+- Session median cadences must agree within `cadence_tol` (0.1 % default); each session's
+  median and mean spacing are recorded in `dataset.sessions`.
 - Export-specific names are mapped explicitly with `[dataset.column_map]`; unmapped columns
   are ignored.
 - Splits are **by session** (`[split]` lists, or a deterministic SHA-1 hash split). Overlap,
@@ -146,8 +149,8 @@ lobe's columns alone so lobe contributions can be read per horizon.
 Each model carries `size.trainable_params`, `size.frozen_params` and
 `size.flops_per_step_est` (an estimate: `2·nnz + 2·N·n_in` per lobe plus the readout).
 `systems` records neurons, non-zeros, wall time per replay step (including feature gathering),
-sampled peak VRAM and the device. Compare the 1 k-neuron ensemble against a 4 k-parameter
-baseline on skill *per* parameter and per FLOP, not on score alone. Energy, if any, comes from
+sampled peak VRAM and the device. Compare the 1 k-neuron ensemble against the baselines
+on skill *per* parameter and per FLOP, not on score alone. Energy, if any, comes from
 the external harness.
 
 ## Reproducibility

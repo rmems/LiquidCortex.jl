@@ -52,6 +52,8 @@ function make_stress_fn(features, rcfg)
     it = findfirst(==("gpu_temp_c"), features); iv = findfirst(==("vram_used_pct"), features)
     tlo = Float64(get(rcfg, "temp_lo_c", 70.0)); thi = Float64(get(rcfg, "temp_hi_c", 90.0))
     vlo = Float64(get(rcfg, "vram_lo_pct", 80.0)); vhi = Float64(get(rcfg, "vram_hi_pct", 98.0))
+    all(isfinite, (tlo, thi, vlo, vhi)) ||
+        throw(ArgumentError("stress: temperature and VRAM bounds must be finite"))
     thi > tlo || throw(ArgumentError("stress: temp_hi_c ($thi) must exceed temp_lo_c ($tlo)"))
     vhi > vlo || throw(ArgumentError("stress: vram_hi_pct ($vhi) must exceed vram_lo_pct ($vlo)"))
     return row -> clamp(max((row[it] - tlo) / (thi - tlo), (row[iv] - vlo) / (vhi - vlo)), 0.0, 1.0)
@@ -151,13 +153,16 @@ function run_benchmark(cfg::AbstractDict; base_dir::AbstractString=pwd(), use_gp
 
     # ── Dataset ──────────────────────────────────────────────────────────────
     required = String.(get(ds, "required_features", unique(vcat(targets, ["gpu_temp_c", "vram_used_pct"]))))
+    jitter_tol = Float64(get(ds, "jitter_tol", 0.25))
     sessions, features, missing_features, src_dt = load_sessions(dir;
         time_column=get(ds, "time_column", "t_ms"), required=required,
-        jitter_tol=Float64(get(ds, "jitter_tol", 0.25)),
+        jitter_tol=jitter_tol, cadence_tol=Float64(get(ds, "cadence_tol", 1e-3)),
         column_map=Dict{String,String}(string(k) => string(v) for (k, v) in get(ds, "column_map", Dict())))
 
     # ── Timebase ─────────────────────────────────────────────────────────────
-    replay_dt = Float64(get(tbc, "replay_dt_ms", src_dt))
+    haskey(tbc, "replay_dt_ms") || throw(TimebaseError(
+        "[timebase] replay_dt_ms is required; it is never inherited from the source cadence ($src_dt ms)"))
+    replay_dt = Float64(tbc["replay_dt_ms"])
     tb = plan_timebase(src_dt, replay_dt; upsample=Symbol(get(tbc, "upsample", "error")),
         tau_mode=Symbol(get(tbc, "tau_mode", "relative_ticks")))
     max_cols = [f in MAX_AGG_FEATURES for f in features]
@@ -356,6 +361,8 @@ function run_benchmark(cfg::AbstractDict; base_dir::AbstractString=pwd(), use_gp
         "meta" => Dict("created_utc" => string(Dates.now(Dates.UTC)), "wall_seconds" => time() - t_wall),
         "dataset" => Dict{String,Any}("dir" => get(ds, "dir", "fixtures"), "sha256" => dataset_hash(sessions),
             "sessions" => [Dict("id" => s.id, "sha256" => s.sha256, "source_rows" => length(s.t_ms),
+                "source_dt_ms" => infer_source_dt_ms(s.t_ms; jitter_tol=jitter_tol),
+                "source_mean_dt_ms" => (s.t_ms[end] - s.t_ms[1]) / (length(s.t_ms) - 1),
                 "replay_rows" => size(replay[s.id], 1)) for s in sessions],
             "partitions" => Dict("train" => split.train, "val" => split.val, "test" => split.test),
             "rows" => Dict(k => size(getfield(S, k).X, 1) for k in keys(S)),
