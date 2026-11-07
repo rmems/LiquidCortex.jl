@@ -1,7 +1,9 @@
 name: GPU CI (self-hosted)
 
-# Runs Julia package tests on the local RTX-class runner (labels: self-hosted, Linux, X64, gpu).
-# CPU smoke stays on ubuntu-latest in ci.yml; this job exercises CUDA kernels.
+# Runs Julia package tests on the local GPU runner only.
+# Labels: self-hosted, Linux, X64, gpu (ShipOfTheseus).
+# The Windows host does not carry `gpu`; it is windows-ci.yml.
+# CPU smoke stays on ubuntu-latest in ci.yml.
 #
 # Security: never run untrusted fork PR code on the persistent self-hosted host
 # (GitHub recommendation). Same-repo PRs, pushes, and manual dispatch only.
@@ -27,7 +29,7 @@ permissions:
 
 jobs:
   gpu-test:
-    name: Julia 1.13 — GPU tests (self-hosted)
+    name: Julia 1.13.2 — GPU tests (self-hosted)
     # Fork PRs: skip (do not checkout untrusted code onto the GPU host).
     if: >
       github.event_name != 'pull_request' ||
@@ -50,8 +52,8 @@ jobs:
           set -euo pipefail
           command -v julia
           julia --version
-          # Job claims Julia 1.13; fail early if runner default drifts.
-          julia -e 'VERSION.major == 1 && VERSION.minor == 13 || error("expected Julia 1.13, got $VERSION")'
+          # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
+          julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
       - name: Pin CI Manifest
@@ -62,8 +64,7 @@ jobs:
       - name: Refresh lockfile on dependency-bot PRs
         if: >
           github.event_name == 'pull_request' &&
-          (github.actor == 'dependabot[bot]' ||
-           startsWith(github.head_ref, 'compathelper/') ||
+          (startsWith(github.head_ref, 'compathelper/') ||
            startsWith(github.head_ref, 'dependabot/'))
         run: julia --project=. -e 'using Pkg; Pkg.update()'
 

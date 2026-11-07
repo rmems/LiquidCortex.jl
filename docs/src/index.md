@@ -48,4 +48,4 @@ REPL helpmode (`?step!`).
 - `EnsembleBrain` — four lobes with different time constants
 - Generic inhibition interface — caller provides a stress signal
 
-Requires **CUDA.jl 6.x**. CI and local verification use **Julia 1.13**.
+Requires **CUDA.jl 6.x**. CI and local verification use **Julia 1.13.2** (Actions channel `1.13`).
