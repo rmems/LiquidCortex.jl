@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "969079cc32ae06307e563511fd9b6ba3638cbc38"
+project_hash = "4a135ddebfdabd99948c47541e35d1c5c048324e"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -34,6 +34,13 @@ weakdeps = ["SparseArrays", "StaticArrays"]
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
 version = "1.1.2"
+
+[[deps.ArnoldiMethod]]
+deps = ["LinearAlgebra", "Random", "StaticArrays"]
+git-tree-sha1 = "d57bd3762d308bded22c3b82d033bff85f6195c6"
+registries = "General"
+uuid = "ec485272-7323-5ecc-a04f-4719b315124d"
+version = "0.4.0"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
@@ -388,7 +395,7 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 version = "1.13.0"
 
 [[deps.LiquidCortex]]
-deps = ["CUDA", "CommonSolve", "LinearAlgebra", "PrecompileTools", "Printf", "Random", "SparseArrays", "Statistics"]
+deps = ["ArnoldiMethod", "CUDA", "CommonSolve", "LinearAlgebra", "PrecompileTools", "Printf", "Random", "SparseArrays", "Statistics"]
 path = "."
 uuid = "1f75a0df-502a-4be0-9310-97a9e2e7f166"
 version = "0.2.0"

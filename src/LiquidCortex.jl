@@ -97,7 +97,7 @@ include("reference_lsm.jl")
 export SparseBrain, EnsembleBrain, BrainConfig, EnsembleDesynchronizedError
 export step!, ensemble_step!, get_output, get_ensemble_output
 export compute_reservoir_covariance, compute_reservoir_covariance!
-export spikes, membrane, traces
+export spikes, membrane, traces, estimate_spectral_radius
 export diagnostics, ensemble_diagnostics
 export reset!, free!
 export LiquidCortexValidationError, ETA, MAX_INHIBITION
