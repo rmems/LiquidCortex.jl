@@ -1221,3 +1221,5 @@ end
     end
 
 end
+
+include("interoception_tests.jl")
