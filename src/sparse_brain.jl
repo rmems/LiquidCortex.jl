@@ -270,7 +270,8 @@ cpu_randn_cu(dims::Integer...) = cpu_randn_cu(Random.default_rng(), dims...)
 # shipped size this is ~42 M nnz × (4 B value + 4 B row index) ≈ 340 MB.
 _estimator_operand(W::SparseMatrixCSC) = SparseMatrixCSC{Float32,Int32}(W)
 _estimator_operand(W::AbstractMatrix) = Matrix{Float32}(W)
-_estimator_operand(W::CUDA.CUSPARSE.AbstractCuSparseMatrix) = _estimator_operand(SparseMatrixCSC(W))
+# CSC/CSR use GPUArrays supertypes in CUDA 6, not AbstractCuSparseMatrix.
+_estimator_operand(W::CUDA.CUSPARSE.CuSparseMatrix) = _estimator_operand(SparseMatrixCSC(W))
 _estimator_operand(W::CuMatrix) = Matrix{Float32}(Array(W))
 
 """

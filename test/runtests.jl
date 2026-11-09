@@ -444,8 +444,15 @@ end
         @test m_cu.sig <: Tuple{Any,CuMatrix}
         @test which(LiquidCortex._estimator_operand, Tuple{Matrix{Float32}}).sig ==
             Tuple{typeof(LiquidCortex._estimator_operand),AbstractMatrix}
-        @test hasmethod(LiquidCortex._estimator_operand,
-            Tuple{CUDA.CUSPARSE.CuSparseMatrixCSC{Float16,Int32}})
+        # hasmethod alone also succeeds for the AbstractMatrix fallback, which
+        # scalar-indexes GPU storage. Check the selected sparse-device method.
+        for T in (CUDA.CUSPARSE.CuSparseMatrixCSC{Float16,Int32},
+                  CUDA.CUSPARSE.CuSparseMatrixCSR{Float16,Int32},
+                  CUDA.CUSPARSE.CuSparseMatrixCOO{Float16,Int32},
+                  CUDA.CUSPARSE.CuSparseMatrixBSR{Float16,Int32})
+            m_sparse = which(LiquidCortex._estimator_operand, Tuple{T})
+            @test m_sparse.sig <: Tuple{Any,CUDA.CUSPARSE.CuSparseMatrix}
+        end
         @test LiquidCortex._estimator_operand(sparse(Float16[1 0; 0 2])) isa SparseMatrixCSC{Float32,Int32}
         @test LiquidCortex._estimator_operand(Float64[1 2; 3 4]) isa Matrix{Float32}
 
@@ -979,7 +986,11 @@ end
             W_host = SparseMatrixCSC(brain.W)
             exact = maximum(abs, eigvals(Matrix{Float64}(W_host)))
             @test isapprox(exact, 0.8f0; rtol=0.05)
-            # Device-side estimate on the CuSparse CSC agrees with eigvals.
+            # Downloaded sparse operand stays sparse and preserves the weights.
+            operand = LiquidCortex._estimator_operand(brain.W)
+            @test operand isa SparseMatrixCSC{Float32,Int32}
+            @test operand == Float32.(W_host)
+            # Estimating a device input must work without scalar indexing.
             est_dev = estimate_spectral_radius(brain.W; rng=Random.Xoshiro(1))
             @test isapprox(est_dev, exact; rtol=0.02)
             free!(brain); reclaim_gpu!()

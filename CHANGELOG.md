@@ -73,7 +73,9 @@ change under `0.2.0`.
   it is more than 5 % off `cfg.spectral_radius`. New exported helper
   `estimate_spectral_radius(W; max_iters, rel_tol, rng, krylov_dim)` works on
   host `SparseMatrixCSC`, dense matrices, `CuSparseMatrixCSC`, and `CuMatrix`
-  (device inputs are copied to the host).
+  (device inputs are copied to the host). Sparse-device dispatch uses CUDA's
+  `CuSparseMatrix` union, including CSC/CSR types whose CUDA 6 supertypes no
+  longer inherit from `AbstractCuSparseMatrix`, avoiding scalar GPU indexing.
   **Any result produced with earlier versions used a reservoir ~25× over the
   documented spectral radius and should be considered invalid.** Internal
   `_generate_recurrent_cpu(cfg)` now returns `(W, rho_measured)`.
