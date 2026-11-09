@@ -49,10 +49,10 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
   Fork pull requests do not check out onto that machine.
   CUDA on the RTX 5080 runs when `CUDA.functional()` is true; CPU tests still run
   when it is not.
-- **GPU tests:** `.github/workflows/gpu-ci.yml` → self-hosted runner labels
-  `self-hosted`, `Linux`, `X64`, `gpu` (`ShipOfTheseus` only). The Windows
-  runner does not have the `gpu` label and does not run this job. Fork pull
-  requests do not check out onto that machine.
+- **GPU tests:** `.github/workflows/gpu-ci.yml` probes idle runners, prefers
+  Linux `self-hosted`, `X64`, `gpu` (`ShipOfTheseus`), else Windows
+  `self-hosted`, `X64`, `liquidcortex`. Skips on `ubuntu-latest` when neither
+  host is idle (no queue). Fork PRs never check out onto self-hosted hosts.
 
 ## PR Instructions
 

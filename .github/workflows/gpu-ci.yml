@@ -1,8 +1,10 @@
 name: GPU CI (self-hosted)
 
-# Runs Julia package tests on the local GPU runner only.
-# Labels: self-hosted, Linux, X64, gpu (ShipOfTheseus).
-# The Windows host does not carry `gpu`; it is windows-ci.yml.
+# ShipOfTheseus: [self-hosted, Linux, X64, gpu]
+# DESKTOP-4E1V5HV-liquidcortex: [self-hosted, Windows, X64, liquidcortex]
+#
+# pick-gpu-runner lists runners via the Actions API so we never queue a job when
+# both hosts are offline or busy. Linux is preferred when both are idle.
 # CPU smoke stays on ubuntu-latest in ci.yml.
 #
 # Security: never run untrusted fork PR code on the persistent self-hosted host
@@ -17,23 +19,47 @@ on:
       - 'release/*'
   workflow_dispatch:
 
-# Serialize per-ref so an unrelated PR does not cancel main/release GPU jobs.
-# The single self-hosted runner still runs at most one job at a time.
-# Do not cancel main/release pushes — only cancel superseded PR runs.
 concurrency:
   group: liquidcortex-gpu-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') }}
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  gpu-test:
-    name: Julia 1.13.2 — GPU tests (self-hosted)
-    # Fork PRs: skip (do not checkout untrusted code onto the GPU host).
+  pick-gpu-runner:
+    name: Select GPU host
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.pick.outputs.target }}
+      reason: ${{ steps.pick.outputs.reason }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pick Linux gpu or Windows liquidcortex runner
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" && \
+                "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+            {
+              echo "target=skip"
+              echo "reason=fork_pr"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bash .github/scripts/pick-gpu-runner.sh
+
+  gpu-test-linux:
+    name: Julia 1.13.2 — GPU tests (Linux self-hosted)
+    needs: pick-gpu-runner
     if: >
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      needs.pick-gpu-runner.outputs.target == 'linux' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64, gpu]
     timeout-minutes: 60
 
@@ -52,15 +78,12 @@ jobs:
           set -euo pipefail
           command -v julia
           julia --version
-          # Channel 1.13. Reject 1.13.0; accept 1.13.2 and later 1.13 patches.
           julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
       - name: Pin CI Manifest
         run: cp .github/ci-manifest/Manifest.toml Manifest.toml
 
-      # CompatHelper / Dependabot edit Project.toml but not this lockfile.
-      # Re-resolve so those PRs actually exercise the new [compat] bounds.
       - name: Refresh lockfile on dependency-bot PRs
         if: >
           github.event_name == 'pull_request' &&
@@ -99,8 +122,6 @@ jobs:
             end
           '
 
-      # GPU coverage is the slice ubuntu-latest cannot see (see issue #55).
-      # Gate on the test step, not job success(), so a reclaim failure still uploads.
       - name: Process coverage
         if: always() && steps.tests.outcome == 'success'
         uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
@@ -122,3 +143,147 @@ jobs:
           set -euo pipefail
           find src test -name '*.cov' -delete
           rm -f lcov.info
+
+  gpu-test-windows:
+    name: Julia 1.13.2 — GPU tests (Windows self-hosted)
+    needs: pick-gpu-runner
+    if: >
+      needs.pick-gpu-runner.outputs.target == 'windows' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Windows, X64, liquidcortex]
+    timeout-minutes: 120
+
+    env:
+      JULIA_NUM_THREADS: "1"
+      JULIA_PKG_PRECOMPILE_AUTO: "1"
+
+    defaults:
+      run:
+        shell: pwsh -NoProfile -ExecutionPolicy Bypass -File "{0}"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Ensure PowerShell 7
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"
+        run: |
+          & .\.github\scripts\ensure-pwsh.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Julia 1.13.2 with juliaup
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & .\.github\scripts\install-juliaup.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Pin CI Manifest
+        run: Copy-Item -LiteralPath .github/ci-manifest/Manifest.toml -Destination Manifest.toml -Force
+
+      - name: Refresh lockfile on dependency-bot PRs
+        if: >
+          github.event_name == 'pull_request' &&
+          (startsWith(github.head_ref, 'compathelper/') ||
+           startsWith(github.head_ref, 'dependabot/'))
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Instantiate
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Require Julia 1.13.2+
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify CUDA.jl in project
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          @assert CUDA.functional() "CUDA.jl reports non-functional device"
+          println(CUDA.name(CUDA.device()))
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run tests (CPU + GPU)
+        id: tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; coverage=true, julia_args=["--pkgimages=no"])'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Reclaim GPU memory
+        if: always()
+        run: |
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          if CUDA.functional()
+              CUDA.synchronize()
+              GC.gc(true)
+              CUDA.reclaim()
+              free = CUDA.free_memory() / 1e9
+              total = CUDA.total_memory() / 1e9
+              println("VRAM free/total GB: ", round(free; digits=2), " / ", round(total; digits=2))
+          end
+          '@
+
+  gpu-skip:
+    name: GPU tests skipped (no runner online)
+    needs: pick-gpu-runner
+    if: needs.pick-gpu-runner.outputs.target == 'skip'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log skip reason
+        run: |
+          echo "No idle self-hosted GPU runner (${{ needs.pick-gpu-runner.outputs.reason }})."
+          echo "Linux gpu and Windows liquidcortex were unavailable; not queuing."
+
+  gpu-ci-result:
+    name: GPU CI gate
+    needs:
+      - pick-gpu-runner
+      - gpu-test-linux
+      - gpu-test-windows
+      - gpu-skip
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate GPU workflow outcome
+        run: |
+          set -euo pipefail
+          if [[ '${{ needs.pick-gpu-runner.result }}' != 'success' ]]; then
+            echo "Runner pick failed"
+            exit 1
+          fi
+          target='${{ needs.pick-gpu-runner.outputs.target }}'
+          case "$target" in
+            linux)
+              [[ '${{ needs.gpu-test-linux.result }}' == 'success' ]]
+              ;;
+            windows)
+              [[ '${{ needs.gpu-test-windows.result }}' == 'success' ]]
+              ;;
+            skip)
+              [[ '${{ needs.gpu-skip.result }}' == 'success' ]]
+              ;;
+            *)
+              echo "Unknown pick target: $target"
+              exit 1
+              ;;
+          esac

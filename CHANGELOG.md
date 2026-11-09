@@ -20,8 +20,19 @@ change under `0.2.0`.
   `windows-latest`. Package tests also run on the Windows self-hosted
   runner (`self-hosted`, `Windows`, `X64`, `liquidcortex`). Documentation
   PRs build on both Ubuntu and Windows; deploy stays on Ubuntu.
+- GPU CI (`gpu-ci.yml`) probes self-hosted runners and runs on Linux `gpu`
+  (`ShipOfTheseus`) when idle, otherwise on Windows `liquidcortex`. When both
+  hosts are offline or busy, the workflow logs a skip on `ubuntu-latest`
+  instead of queuing.
 
 ### Added
+
+- Machine Interoception Benchmark v1 (`examples/interoception/`, `docs/machine-interoception.md`):
+  a deterministic, session-split replay of telemetry through persistence / ridge / MLP baselines
+  and readout-only `SparseBrain` / `EnsembleBrain` readouts (plus a reflex-gated online-readout
+  and a recurrent pair-STDP ablation), with an explicit timebase contract and a machine-readable
+  JSON result. Example code only; the core package is unchanged. Tests in
+  `test/interoception_tests.jl`.
 
 - `ReferenceLSM` owns reference-reservoir weights and membrane state. Two
   instances do not share arrays; construction is deterministic given `rng`.
@@ -47,6 +58,12 @@ change under `0.2.0`.
   `CONTRIBUTING.md`, `SECURITY.md`, and `.JuliaFormatter.toml`.
 - CI-only Manifest at `.github/ci-manifest/Manifest.toml` (Julia 1.13). Root
   `Manifest.toml` stays gitignored so library consumers are not pinned.
+
+### Changed
+
+- README/docs describe LiquidCortex as an experimental GPU sparse LSM, add "Where LiquidCortex
+  Fits", and separate recurrent pair-STDP from read-only covariance analysis in the wording.
+  Documenter `authors` updated to `rmems`.
 
 ### Removed
 
