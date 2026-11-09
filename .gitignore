@@ -17,4 +17,7 @@ lcov.info
 # Local exploration / agent notes (never ship)
 .explore-notes/
 playground-results/
-.cursor/
+.cursor/*
+# Cursor Cloud Agent environment: committed on purpose.
+!.cursor/environment.json
+!.cursor/install.sh
