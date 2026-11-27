@@ -74,7 +74,20 @@ if ($LASTEXITCODE -ne 0) {
     throw "julia --version exited $LASTEXITCODE"
 }
 & $juliaupExe status
-& $juliaExe -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
+
+# Run the version check from a file: Windows PowerShell 5.1 mangles the
+# embedded quotes that `julia -e 'v"1.13.2" ...'` needs.
+$versionCheck = Join-Path ([System.IO.Path]::GetTempPath()) 'check-julia-version.jl'
+$versionCheckCode = @'
+(VERSION.major == 1 && VERSION.minor == 13 && VERSION.patch >= 2) ||
+    error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")
+'@
+[System.IO.File]::WriteAllText(
+    $versionCheck,
+    $versionCheckCode,
+    [System.Text.UTF8Encoding]::new($false)
+)
+& $juliaExe --pkgimages=no $versionCheck
 if ($LASTEXITCODE -ne 0) {
     throw "Julia version check failed"
 }

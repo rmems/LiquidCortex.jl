@@ -14,6 +14,12 @@ function Add-GithubPath {
     }
 
     $env:Path = "$full;$env:Path"
-    Add-Content -Path $env:GITHUB_PATH -Value $full
+    # Append as UTF-8 without BOM: under Windows PowerShell 5.1 Add-Content
+    # would write ANSI and corrupt non-ASCII paths for the runner's reader.
+    [System.IO.File]::AppendAllText(
+        $env:GITHUB_PATH,
+        "$full`r`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
     Write-Host "Prepended to job PATH: $full"
 }

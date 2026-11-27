@@ -253,13 +253,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Same GPU coverage slice as the Linux job (issue #55). The
-      # julia-processcoverage composite action runs its Julia script through
-      # bash, which the Windows runner gets from Git for Windows.
+      # julia-processcoverage composite action runs plain `julia`, which this
+      # host's Application Control policy blocks via pkgimages, so process
+      # coverage through the repo script with --pkgimages=no instead.
       - name: Process coverage
         if: always() && steps.tests.outcome == 'success'
-        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
-        with:
-          directories: src
+        env:
+          COVERAGE_DIRECTORIES: src
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no .github/scripts/process-coverage.jl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload coverage to Codecov
         if: always() && steps.tests.outcome == 'success'

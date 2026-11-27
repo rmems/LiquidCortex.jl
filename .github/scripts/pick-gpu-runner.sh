@@ -105,7 +105,9 @@ runner_busy() {
     while IFS= read -r run_id; do
         [ -n "$run_id" ] || continue
         if ! jobs_json="$(gh api "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100")"; then
-            continue
+            # Fail closed like the runs request above: an unreadable in-progress
+            # run might be holding this runner.
+            return 0
         fi
         while IFS= read -r job_json; do
             [ -n "$job_json" ] || continue
@@ -132,7 +134,9 @@ latest_canaries() {
     while IFS= read -r run_id; do
         [ -n "$run_id" ] || continue
         if ! jobs_json="$(gh api "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100")"; then
-            continue
+            # Stop rather than fall back to older runs: a newer canary we
+            # cannot read might be a failure that should hide the heartbeat.
+            break
         fi
         while IFS= read -r job_json; do
             [ -n "$job_json" ] || continue
