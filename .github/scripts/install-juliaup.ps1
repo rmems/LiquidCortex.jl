@@ -59,9 +59,15 @@ if (-not (Test-Path -LiteralPath $juliaupExe)) {
 $bin = Split-Path -Parent $juliaupExe
 Add-GithubPath $bin
 
-& $juliaupExe add $JuliaVersion
-if ($LASTEXITCODE -ne 0) {
-    throw "juliaup add $JuliaVersion exited $LASTEXITCODE"
+# juliaup persists between jobs on this self-hosted host, and `juliaup add`
+# fails on a channel that is already installed, so check first.
+$channelPattern = "^\s*\*?\s*$([regex]::Escape($JuliaVersion))(\s|\*|$)"
+$alreadyInstalled = & $juliaupExe list | Select-String -Pattern $channelPattern
+if (-not $alreadyInstalled) {
+    & $juliaupExe add $JuliaVersion
+    if ($LASTEXITCODE -ne 0) {
+        throw "juliaup add $JuliaVersion exited $LASTEXITCODE"
+    }
 }
 & $juliaupExe default $JuliaVersion
 if ($LASTEXITCODE -ne 0) {

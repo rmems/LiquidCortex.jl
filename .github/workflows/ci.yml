@@ -66,6 +66,14 @@ jobs:
         with:
           directories: src
 
+      # The Windows GPU job uses this converter instead of the action above
+      # (see AGENTS.md). Exercise it here on the real .cov files this suite
+      # just produced so skipped GPU runs never leave it untested.
+      - name: Smoke-test coverage converter
+        env:
+          COVERAGE_DIRECTORIES: src
+        run: julia .github/scripts/process-coverage.jl
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
@@ -73,3 +81,21 @@ jobs:
           flags: julia
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  ci-scripts:
+    name: CI script tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Syntax-check shell scripts
+        run: bash -n .github/scripts/*.sh .github/scripts/tests/*.sh
+
+      # Runs pick-gpu-runner.sh end to end against a fake `gh api`; covers
+      # fresh/stale/cancelled canaries, busy hosts, and queued-job races.
+      - name: Test GPU runner picker
+        run: bash .github/scripts/tests/pick-gpu-runner.test.sh

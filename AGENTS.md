@@ -47,6 +47,16 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
   `X64`, `liquidcortex` (`DESKTOP-4E1V5HV-liquidcortex`). If neither has a fresh
   `gpu-runner-canary.yml` heartbeat, the GPU job skips instead of queueing.
 - GPU jobs use a repo-wide concurrency group so only one GPU suite runs at a time
+- **Windows coverage exception:** the Windows GPU job cannot use
+  `julia-actions/julia-processcoverage` — the composite action runs plain
+  `julia`, which the host's Application Control policy blocks through
+  pkgimages. It runs `.github/scripts/process-coverage.jl` with
+  `julia --pkgimages=no` instead; keep that flag on the step. The same
+  converter is smoke-tested in `ci.yml` on real `.cov` output.
+- **CI script tests:** `ci.yml`'s `ci-scripts` job runs
+  `.github/scripts/tests/pick-gpu-runner.test.sh`, which exercises the runner
+  picker end to end against a fake `gh api` (fresh/stale/cancelled canaries,
+  busy hosts, queued-job races).
 
 ## PR Instructions
 

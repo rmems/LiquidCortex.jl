@@ -266,8 +266,12 @@ jobs:
           & julia --pkgimages=no .github/scripts/process-coverage.jl
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # fail_ci_if_error only covers the upload: the action's sh preflight
+      # (bash/git/curl/gpg) runs first and can still fail the step on this
+      # Windows host, so keep the whole step best-effort like the flag intends.
       - name: Upload coverage to Codecov
         if: always() && steps.tests.outcome == 'success'
+        continue-on-error: true
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov.info
