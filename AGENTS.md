@@ -31,7 +31,7 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
 - Generic inhibition interface: `step!(brain::SparseBrain, u::CuVector{Float32}; inhibition::Real=0.0, reflex_eta::Real=ETA)`
 - Step kwargs: `plasticity=:readout_only` (default), `:recurrent_stdp`, `:none`; plus `sync`, `record_history`, `use_device_noise`, `recurrent_eta`
 - Configurable dimensions: `SparseBrain(tau_m::Real; cfg::BrainConfig=BrainConfig(), n_in::Int=14, n_out::Int=16, name::AbstractString="default")` — `tau_m` is stored as `Float32`; `BrainConfig` carries `N`, connectivity, spectral radius, LIF/STDP knobs, and `rng`
-- Compat: CUDA.jl `6` (latest); local TDD/verify on Julia 1.13
+- Compat: CUDA.jl `6` (latest); local TDD/verify on Julia 1.13.2
 
 ## Testing
 
@@ -39,18 +39,33 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
   reservoir kernels**: pair STDP, readout Hebbian, CSC, inhibition, aggregation)
 - GPU tests gated by `LiquidCortex._cuda_available[]` (no `@test_skip` literals)
 - Stochastic GPU cases seed host `Random` and `CUDA.seed!`
-- CI workflows run Julia **1.13** only. Compat declares `1.10, 1.11, 1.12`, which resolves to the range `[1.10, 2.0)` and therefore already admits 1.13 — but 1.10 and 1.11 are never built.
+- CI workflows run Julia **1.13.2**. Compat declares `1.10, 1.11, 1.12`, which resolves to the range `[1.10, 2.0)` and therefore already admits 1.13 — but 1.10 and 1.11 are never built.
 - **CPU smoke:** `.github/workflows/ci.yml` → `ubuntu-latest`
-- **GPU tests:** `.github/workflows/gpu-ci.yml` → self-hosted runner labels
-  `self-hosted`, `Linux`, `X64`, `gpu` (local RTX host under
-  `~/actions-runner/LiquidCortex.jl-runner/`, not inside the git clone)
+- **GPU tests:** `.github/workflows/gpu-ci.yml` picks the first available
+  self-hosted runner — Linux `self-hosted`, `Linux`, `X64`, `gpu`
+  (`ShipOfTheseus` / `wsl-liquidcortex`) or Windows `self-hosted`, `Windows`,
+  `X64`, `liquidcortex` (`DESKTOP-4E1V5HV-liquidcortex`). If neither has a fresh
+  `gpu-runner-canary.yml` heartbeat, the GPU job skips instead of queueing.
 - GPU jobs use a repo-wide concurrency group so only one GPU suite runs at a time
+- **Windows coverage exception:** the Windows GPU job cannot use
+  `julia-actions/julia-processcoverage` — the composite action runs plain
+  `julia`, which the host's Application Control policy blocks through
+  pkgimages. It runs `.github/scripts/process-coverage.jl` with
+  `julia --pkgimages=no` instead; keep that flag on the step. The same
+  converter is smoke-tested in `ci.yml` on real `.cov` output.
+- **CI script tests:** `ci.yml`'s `ci-scripts` job syntax-checks every `.sh`
+  under `.github/scripts` and runs two end-to-end harnesses:
+  `.github/scripts/tests/pick-gpu-runner.test.sh` (runner picker against a
+  fake `gh api`: fresh/stale/cancelled canaries, busy hosts, queued-job
+  races) and `.github/scripts/tests/install-juliaup.test.sh` (the juliaup
+  installer under pwsh against a fake juliaup: catalog-vs-installed channel
+  detection plus `add`/`default` ordering).
 
 ## PR Instructions
 
 - Branch naming: `feature/`, `fix/`, `ci/`, `refactor/`, `docs/`
 - Run tests before pushing
-- All CI checks must pass (Julia 1.13, Codacy, CodeRabbit)
+- All CI checks must pass (Julia 1.13.2, Codacy, CodeRabbit)
 - Address all bot review threads before merge
 - Pin GitHub Actions to full commit SHAs (not tags)
 - Use `julia-actions/julia-processcoverage` for coverage — not Coverage.jl in Project.toml

@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1.13']
+        julia-version: ['1.13.2']
 
     steps:
       - name: Checkout
@@ -33,6 +33,9 @@ jobs:
         uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
         with:
           version: ${{ matrix.julia-version }}
+
+      - name: Verify Julia version
+        run: julia -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
@@ -63,6 +66,14 @@ jobs:
         with:
           directories: src
 
+      # The Windows GPU job uses this converter instead of the action above
+      # (see AGENTS.md). Exercise it here on the real .cov files this suite
+      # just produced so skipped GPU runs never leave it untested.
+      - name: Smoke-test coverage converter
+        env:
+          COVERAGE_DIRECTORIES: src
+        run: julia .github/scripts/process-coverage.jl
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
@@ -70,3 +81,28 @@ jobs:
           flags: julia
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  ci-scripts:
+    name: CI script tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `bash -n` parses only its first file argument (the rest become
+      # positional parameters), so check every script one at a time.
+      - name: Syntax-check shell scripts
+        run: find .github/scripts -name '*.sh' -print0 | xargs -0 -t -n1 bash -n
+
+      # Runs pick-gpu-runner.sh end to end against a fake `gh api`; covers
+      # fresh/stale/cancelled canaries, busy hosts, and queued-job races.
+      - name: Test GPU runner picker
+        run: bash .github/scripts/tests/pick-gpu-runner.test.sh
+
+      # Runs install-juliaup.ps1 end to end under pwsh against a fake
+      # juliaup; covers the installed-channel check that gates `add`.
+      - name: Test juliaup installer
+        run: bash .github/scripts/tests/install-juliaup.test.sh

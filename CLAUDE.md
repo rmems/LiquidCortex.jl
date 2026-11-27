@@ -13,7 +13,7 @@ below was executed. Commands are taken from `AGENTS.md` and `.github/workflows/`
 | Command | Status |
 |---|---|
 | `julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'` | not run (no `julia` on PATH); CI runs this |
-| `julia --project=. -e 'using Pkg; Pkg.test(; coverage=true)'` | not run (no `julia` on PATH); CI runs this on Julia 1.13 |
+| `julia --project=. -e 'using Pkg; Pkg.test(; coverage=true)'` | not run (no `julia` on PATH); CI runs this on Julia 1.13.2 |
 | `julia --project -e 'using Pkg; Pkg.test()'` | not run (no `julia` on PATH) |
 | `julia --project=docs docs/make.jl` | not run (no `julia` on PATH); `documentation.yml` runs it |
 

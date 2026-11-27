@@ -1,0 +1,41 @@
+name: GPU runner canary
+
+# Heartbeat for the two self-hosted GPU hosts. gpu-ci.yml reads these job
+# results through the Actions API (actions:read) instead of the admin-only
+# runners endpoint, so an offline host skips GPU CI instead of queueing it.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: gpu-runner-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-canary:
+    name: linux-canary
+    runs-on: [self-hosted, Linux, X64, gpu]
+    timeout-minutes: 5
+    steps:
+      - name: Confirm Linux GPU runner
+        shell: bash
+        run: echo "Linux GPU runner online"
+
+  windows-canary:
+    name: windows-canary
+    runs-on: [self-hosted, Windows, X64, liquidcortex]
+    timeout-minutes: 5
+    steps:
+      - name: Confirm Windows GPU runner
+        # The host's LocalMachine policy is Restricted, which blocks the
+        # temp scripts behind the built-in powershell/pwsh shells, so use an
+        # explicit -ExecutionPolicy Bypass template like gpu-ci.yml does.
+        shell: 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"'
+        run: Write-Output 'Windows GPU runner online'
