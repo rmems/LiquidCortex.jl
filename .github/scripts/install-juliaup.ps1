@@ -60,9 +60,16 @@ $bin = Split-Path -Parent $juliaupExe
 Add-GithubPath $bin
 
 # juliaup persists between jobs on this self-hosted host, and `juliaup add`
-# fails on a channel that is already installed, so check first.
+# fails on a channel that is already installed, so check first. `list` prints
+# the downloadable catalog, not local installs — a catalog-only channel still
+# needs `add` before `default` accepts it — so match against `status`, which
+# lists installed channels (default marked with *).
 $channelPattern = "^\s*\*?\s*$([regex]::Escape($JuliaVersion))(\s|\*|$)"
-$alreadyInstalled = & $juliaupExe list | Select-String -Pattern $channelPattern
+$installedChannels = & $juliaupExe status
+if ($LASTEXITCODE -ne 0) {
+    throw "juliaup status exited $LASTEXITCODE"
+}
+$alreadyInstalled = $installedChannels | Select-String -Pattern $channelPattern
 if (-not $alreadyInstalled) {
     & $juliaupExe add $JuliaVersion
     if ($LASTEXITCODE -ne 0) {

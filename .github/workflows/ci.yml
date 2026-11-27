@@ -92,10 +92,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # `bash -n` parses only its first file argument (the rest become
+      # positional parameters), so check every script one at a time.
       - name: Syntax-check shell scripts
-        run: bash -n .github/scripts/*.sh .github/scripts/tests/*.sh
+        run: find .github/scripts -name '*.sh' -print0 | xargs -0 -t -n1 bash -n
 
       # Runs pick-gpu-runner.sh end to end against a fake `gh api`; covers
       # fresh/stale/cancelled canaries, busy hosts, and queued-job races.
       - name: Test GPU runner picker
         run: bash .github/scripts/tests/pick-gpu-runner.test.sh
+
+      # Runs install-juliaup.ps1 end to end under pwsh against a fake
+      # juliaup; covers the installed-channel check that gates `add`.
+      - name: Test juliaup installer
+        run: bash .github/scripts/tests/install-juliaup.test.sh

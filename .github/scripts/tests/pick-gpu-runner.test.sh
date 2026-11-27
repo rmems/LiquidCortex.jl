@@ -31,7 +31,8 @@ gh() {
         echo "fake gh: unexpected args: $*" >&2
         return 1
     fi
-    local f="$MOCK_DIR/$(printf '%s' "$2" | tr -c 'A-Za-z0-9' '_').json"
+    local f
+    f="$MOCK_DIR/$(printf '%s' "$2" | tr -c 'A-Za-z0-9' '_').json"
     if [[ ! -f "$f" ]]; then
         echo "fake gh: no fixture for $2" >&2
         return 1

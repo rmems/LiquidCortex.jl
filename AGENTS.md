@@ -53,10 +53,13 @@ Julia package with CUDA acceleration, cuSPARSE Float16, STDP covariance learning
   pkgimages. It runs `.github/scripts/process-coverage.jl` with
   `julia --pkgimages=no` instead; keep that flag on the step. The same
   converter is smoke-tested in `ci.yml` on real `.cov` output.
-- **CI script tests:** `ci.yml`'s `ci-scripts` job runs
-  `.github/scripts/tests/pick-gpu-runner.test.sh`, which exercises the runner
-  picker end to end against a fake `gh api` (fresh/stale/cancelled canaries,
-  busy hosts, queued-job races).
+- **CI script tests:** `ci.yml`'s `ci-scripts` job syntax-checks every `.sh`
+  under `.github/scripts` and runs two end-to-end harnesses:
+  `.github/scripts/tests/pick-gpu-runner.test.sh` (runner picker against a
+  fake `gh api`: fresh/stale/cancelled canaries, busy hosts, queued-job
+  races) and `.github/scripts/tests/install-juliaup.test.sh` (the juliaup
+  installer under pwsh against a fake juliaup: catalog-vs-installed channel
+  detection plus `add`/`default` ordering).
 
 ## PR Instructions
 
