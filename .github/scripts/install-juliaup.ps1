@@ -59,8 +59,9 @@ if (-not (Test-Path -LiteralPath $juliaupExe)) {
 $bin = Split-Path -Parent $juliaupExe
 Add-GithubPath $bin
 
-# juliaup persists between jobs on this self-hosted host, and `juliaup add`
-# fails on a channel that is already installed, so check first. `list` prints
+# juliaup persists between jobs on this self-hosted host, so skip the add
+# when the channel is already installed — juliaup treats it as a successful
+# no-op, but the status check avoids the redundant call. `list` prints
 # the downloadable catalog, not local installs — a catalog-only channel still
 # needs `add` before `default` accepts it — so match against `status`, which
 # lists installed channels (default marked with *).

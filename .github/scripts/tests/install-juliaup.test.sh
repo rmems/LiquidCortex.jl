@@ -34,8 +34,9 @@ cat >"$CATALOG" <<'EOF'
  1.13.2~x64              1.13.2+0.x64.w64.mingw32
 EOF
 
-# `juliaup status` mirrors the real installed-channels table; `add` fails on
-# an installed channel and `default` fails on a missing one, matching juliaup.
+# `juliaup status` mirrors the real installed-channels table; `add` is a
+# successful no-op on an installed channel (juliaup 1.22.7 prints a notice to
+# stderr and exits 0) and `default` fails on a missing one, matching juliaup.
 cat >"$BIN/juliaup" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -57,8 +58,8 @@ case "${1:-}" in
     add)
         ch="${2:-}"
         if grep -qxF "$ch" "$FAKE_INSTALLED"; then
-            echo "channel '$ch' is already installed" >&2
-            exit 1
+            echo "'$ch' is already installed." >&2
+            exit 0
         fi
         printf '%s\n' "$ch" >>"$FAKE_INSTALLED"
         ;;
@@ -127,14 +128,15 @@ fi
 called 'default 1.13.2' || fail 'juliaup default 1.13.2 was not invoked'
 ok 'catalog-only channel still gets juliaup add and default'
 
-# --- 1.13.2 already installed -> add must be skipped -------------------------
+# --- 1.13.2 installed but not the default (unmarked row) -> add is skipped ---
 printf '1.13.2\nrelease\n' >"$INSTALLED"
+printf 'release\n' >"$DEFAULT"
 expect_install_ok
 if called 'add 1.13.2'; then
     fail 'juliaup add ran for an already-installed channel'
 fi
 called 'default 1.13.2' || fail 'juliaup default 1.13.2 was not invoked'
-ok 'installed channel skips juliaup add'
+ok 'unmarked installed channel skips juliaup add'
 
 # --- Default-marked installed channel is still detected -----------------------
 printf 'release\n1.13.2\n' >"$INSTALLED"
