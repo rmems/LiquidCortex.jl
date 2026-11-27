@@ -28,7 +28,6 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   pick-gpu-runner:
@@ -38,6 +37,10 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Only the picker reads Actions metadata; GPU jobs get contents:read.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       target: ${{ steps.pick.outputs.target }}
       reason: ${{ steps.pick.outputs.reason }}
@@ -228,7 +231,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           # Application Control blocks Julia's native pkgimage cache on this
           # host, so the test subprocess must also run with --pkgimages=no.
-          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; julia_args=["--pkgimages=no"])'
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; coverage=true, julia_args=["--pkgimages=no"])'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Reclaim GPU memory
@@ -248,6 +251,31 @@ jobs:
           end
           '@
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Same GPU coverage slice as the Linux job (issue #55). The
+      # julia-processcoverage composite action runs its Julia script through
+      # bash, which the Windows runner gets from Git for Windows.
+      - name: Process coverage
+        if: always() && steps.tests.outcome == 'success'
+        uses: julia-actions/julia-processcoverage@03114f09f119417c3242a9fb6e0b722676aedf38 # v1
+        with:
+          directories: src
+
+      - name: Upload coverage to Codecov
+        if: always() && steps.tests.outcome == 'success'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: lcov.info
+          flags: julia-gpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Remove coverage artifacts
+        if: always()
+        run: |
+          Get-ChildItem -Path src, test -Recurse -Filter '*.cov' -File -ErrorAction SilentlyContinue |
+              Remove-Item -Force
+          Remove-Item -LiteralPath lcov.info -Force -ErrorAction SilentlyContinue
 
   gpu-skip:
     name: GPU tests skipped (no runner online)

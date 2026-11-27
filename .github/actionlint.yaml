@@ -1,0 +1,5 @@
+# actionlint does not know repo-specific self-hosted runner labels.
+self-hosted-runner:
+  labels:
+    - gpu
+    - liquidcortex

@@ -34,5 +34,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Confirm Windows GPU runner
-        shell: cmd
-        run: echo Windows GPU runner online
+        shell: powershell
+        run: Write-Output 'Windows GPU runner online'

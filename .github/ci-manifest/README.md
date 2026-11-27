@@ -12,7 +12,7 @@ Use Julia **1.13.2** (the pinned CI patch):
 
 ```bash
 cp .github/ci-manifest/Manifest.toml Manifest.toml
-julia --project=. -e 'using Pkg; Pkg.resolve()'
+julia --project=. -e 'using Pkg; Pkg.update()'
 cp Manifest.toml .github/ci-manifest/Manifest.toml
 ```
 

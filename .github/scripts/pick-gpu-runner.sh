@@ -26,10 +26,11 @@ epoch_or_zero() {
 has_all_labels() {
     local job_json="$1"
     shift
-    local label
+    local label wanted
     for label in "$@"; do
-        if ! jq -e --arg label "$label" \
-            '[.labels[]? | select(. == $label)] | length > 0' \
+        wanted="$label"
+        if ! jq -e --arg wanted "$wanted" \
+            '[.labels[]? | select(. == $wanted)] | length > 0' \
             <<<"$job_json" >/dev/null; then
             return 1
         fi
@@ -53,11 +54,12 @@ target_labels() {
 }
 
 job_matches_target() {
-    local job_json="$1" target="$2" label
+    local job_json="$1" target="$2" label wanted
     while IFS= read -r label; do
         [ -n "$label" ] || continue
-        if ! jq -e --arg label "$label" \
-            '[.labels[]? | select(. == $label)] | length > 0' \
+        wanted="$label"
+        if ! jq -e --arg wanted "$wanted" \
+            '[.labels[]? | select(. == $wanted)] | length > 0' \
             <<<"$job_json" >/dev/null; then
             return 1
         fi
@@ -134,6 +136,10 @@ latest_canaries() {
         fi
         while IFS= read -r job_json; do
             [ -n "$job_json" ] || continue
+            # Only a completed canary proves a heartbeat. A queued or
+            # in-progress canary (e.g. the one a main push starts alongside
+            # GPU CI) must not mask an older fresh success.
+            [[ "$(job_field "$job_json" status)" == "completed" ]] || continue
             if [[ -z "${seen[linux]:-}" ]] && is_linux_canary "$job_json"; then
                 seen[linux]="$job_json"
             fi
