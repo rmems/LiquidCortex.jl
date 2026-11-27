@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1.13']
+        julia-version: ['1.13.2']
 
     steps:
       - name: Checkout
@@ -33,6 +33,9 @@ jobs:
         uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
         with:
           version: ${{ matrix.julia-version }}
+
+      - name: Verify Julia version
+        run: julia -e 'VERSION == v"1.13.2" || error("expected Julia 1.13.2, got $VERSION")'
 
       - name: Cache Julia artifacts
         uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0

@@ -1,7 +1,12 @@
 name: GPU CI (self-hosted)
 
-# Runs Julia package tests on the local RTX-class runner (labels: self-hosted, Linux, X64, gpu).
-# CPU smoke stays on ubuntu-latest in ci.yml; this job exercises CUDA kernels.
+# Runs Julia package tests on whichever self-hosted GPU runner is available:
+#   Linux:   self-hosted, Linux, X64, gpu        (ShipOfTheseus / wsl-liquidcortex)
+#   Windows: self-hosted, Windows, X64, liquidcortex (DESKTOP-4E1V5HV-liquidcortex)
+# pick-gpu-runner uses the Actions runs/jobs APIs (actions:read) plus the
+# gpu-runner-canary heartbeat. It never calls the admin-only runners list API,
+# so GITHUB_TOKEN cannot leak runner inventory and an offline host skips this
+# workflow instead of leaving a self-hosted job queued for 24 hours.
 #
 # Security: never run untrusted fork PR code on the persistent self-hosted host
 # (GitHub recommendation). Same-repo PRs, pushes, and manual dispatch only.
@@ -16,7 +21,6 @@ on:
   workflow_dispatch:
 
 # Serialize per-ref so an unrelated PR does not cancel main/release GPU jobs.
-# The single self-hosted runner still runs at most one job at a time.
 # Do not cancel main/release pushes — only cancel superseded PR runs.
 concurrency:
   group: liquidcortex-gpu-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
@@ -24,14 +28,36 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  gpu-test:
-    name: Julia 1.13 — GPU tests (self-hosted)
-    # Fork PRs: skip (do not checkout untrusted code onto the GPU host).
+  pick-gpu-runner:
+    name: Select GPU host
+    # Fork PRs: skip before checkout so untrusted code never reaches a runner.
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.pick.outputs.target }}
+      reason: ${{ steps.pick.outputs.reason }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pick available self-hosted GPU runner
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/pick-gpu-runner.sh
+
+  gpu-test-linux:
+    name: Julia 1.13.2 — GPU tests (Linux self-hosted)
+    needs: pick-gpu-runner
+    if: needs.pick-gpu-runner.outputs.target == 'linux'
     runs-on: [self-hosted, Linux, X64, gpu]
     timeout-minutes: 60
 
@@ -50,8 +76,9 @@ jobs:
           set -euo pipefail
           command -v julia
           julia --version
-          # Job claims Julia 1.13; fail early if runner default drifts.
-          julia -e 'VERSION.major == 1 && VERSION.minor == 13 || error("expected Julia 1.13, got $VERSION")'
+          # Self-hosted Julia is host-managed; accept the 1.13 line at or above
+          # the pinned CI patch so a host patch bump does not break the check.
+          julia -e 'v"1.13.2" <= VERSION < v"1.14" || error("expected Julia 1.13.2 or a newer 1.13 patch, got $VERSION")'
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
       - name: Pin CI Manifest
@@ -121,3 +148,116 @@ jobs:
           set -euo pipefail
           find src test -name '*.cov' -delete
           rm -f lcov.info
+
+  gpu-test-windows:
+    name: Julia 1.13.2 — GPU tests (Windows self-hosted)
+    needs: pick-gpu-runner
+    if: needs.pick-gpu-runner.outputs.target == 'windows'
+    runs-on: [self-hosted, Windows, X64, liquidcortex]
+    timeout-minutes: 120
+
+    env:
+      JULIA_NUM_THREADS: "1"
+      JULIA_PKG_PRECOMPILE_AUTO: "1"
+
+    # This host's LocalMachine execution policy is Restricted and pwsh is not
+    # installed by default. Bootstrap PowerShell 7 with Windows PowerShell 5.1
+    # (-ExecutionPolicy Bypass), then run the remaining steps through pwsh.
+    defaults:
+      run:
+        shell: 'pwsh -NoProfile -ExecutionPolicy Bypass -File "{0}"'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Ensure PowerShell 7
+        shell: 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"'
+        run: |
+          & .\.github\scripts\ensure-pwsh.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Julia 1.13.2 with juliaup
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & .\.github\scripts\install-juliaup.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Pin CI Manifest
+        run: Copy-Item -LiteralPath .github/ci-manifest/Manifest.toml -Destination Manifest.toml -Force
+
+      # CompatHelper / Dependabot edit Project.toml but not this lockfile.
+      # Re-resolve so those PRs actually exercise the new [compat] bounds.
+      - name: Refresh lockfile on dependency-bot PRs
+        if: >
+          github.event_name == 'pull_request' &&
+          (github.actor == 'dependabot[bot]' ||
+           startsWith(github.head_ref, 'compathelper/') ||
+           startsWith(github.head_ref, 'dependabot/'))
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.update()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Instantiate
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify CUDA.jl in project
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          @assert CUDA.functional() "CUDA.jl reports non-functional device"
+          println(CUDA.name(CUDA.device()))
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run tests (CPU + GPU)
+        id: tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # Application Control blocks Julia's native pkgimage cache on this
+          # host, so the test subprocess must also run with --pkgimages=no.
+          & julia --pkgimages=no --project=. -e 'using Pkg; Pkg.test(; julia_args=["--pkgimages=no"])'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Reclaim GPU memory
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & julia --pkgimages=no --project=. -e @'
+          using CUDA
+          if CUDA.functional()
+              CUDA.synchronize()
+              GC.gc(true)
+              CUDA.reclaim()
+              free = CUDA.free_memory() / 1e9
+              total = CUDA.total_memory() / 1e9
+              println("VRAM free/total GB: ", round(free; digits=2), " / ", round(total; digits=2))
+          end
+          '@
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  gpu-skip:
+    name: GPU tests skipped (no runner online)
+    needs: pick-gpu-runner
+    if: needs.pick-gpu-runner.outputs.target == 'skip'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log skip reason
+        env:
+          PICK_REASON: ${{ needs.pick-gpu-runner.outputs.reason }}
+        run: |
+          echo "No idle self-hosted GPU runner (${PICK_REASON})."
+          echo "Linux gpu and Windows liquidcortex were unavailable; not queuing."
